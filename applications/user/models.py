@@ -21,6 +21,19 @@ class UserStatus(str, Enum):
     ACTIVE    = "active"
     SUSPENDED = "suspended"
 
+class ActivityActionType(str, Enum):
+    USER_REGISTERED      = "user_registered"
+    USER_VALIDATED       = "user_validated"
+    ARTICLE_PUBLISHED    = "article_published"
+    POST_CREATED         = "post_created"
+    POST_APPROVED        = "post_approved"
+    POST_REJECTED        = "post_rejected"
+    TOPIC_CREATED        = "topic_created"
+    EVENT_CREATED        = "event_created"
+    TRAINING_REGISTERED  = "training_registered"
+    DOCUMENT_UPLOADED    = "document_uploaded"
+    MODERATION_FLAG      = "moderation_flag"
+
 
 # ─────────────────────────────────────────
 # 1. MembershipCategory
@@ -192,3 +205,23 @@ class User(models.Model):
 
     def __str__(self) -> str:
         return self.full_name
+    
+
+
+
+class ActivityLog(models.Model):
+    """
+    Platform-wide activity feed (polymorphic: target_type + target_id).
+    Drives the dashboard Recent Activity widget.
+    """
+    id          = fields.UUIDField(pk=True, default=uuid.uuid4)
+    user        = fields.ForeignKeyField("models.User", related_name="activity_logs", on_delete=fields.CASCADE)
+    action_type = fields.CharEnumField(ActivityActionType)
+    target_type = fields.CharField(max_length=50, null=True)   # "article" | "post" | "event" | "training" | "user"
+    target_id   = fields.UUIDField(null=True)
+    description = fields.TextField(null=True)
+    created_at  = fields.DatetimeField(auto_now_add=True)
+ 
+    class Meta:
+        table    = "activity_logs"
+        ordering = ["-created_at"]

@@ -40,8 +40,8 @@ REFRESH_SECRET_KEY  = getattr(settings, "REFRESH_SECRET_KEY", None) or f"{SECRET
 ALGORITHM           = getattr(settings, "JWT_ALGORITHM", "HS256")
 
 # §4.2: access token 30 min, refresh token 30 days
-ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int_setting("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
-REFRESH_TOKEN_EXPIRE_DAYS   = _safe_int_setting("REFRESH_TOKEN_EXPIRE_DAYS", 30)
+ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int_setting("ACCESS_TOKEN_EXPIRE_MINUTES", 30*24*60)
+REFRESH_TOKEN_EXPIRE_DAYS   = _safe_int_setting("REFRESH_TOKEN_EXPIRE_DAYS", 60*24*60)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login_auth2/", auto_error=False)
 
