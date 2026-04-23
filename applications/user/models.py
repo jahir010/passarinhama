@@ -33,6 +33,7 @@ class ActivityActionType(str, Enum):
     TRAINING_REGISTERED  = "training_registered"
     DOCUMENT_UPLOADED    = "document_uploaded"
     MODERATION_FLAG      = "moderation_flag"
+    POST_FORWARDED       = "post_forwarded"  # ← added per docs §4.3
 
 
 # ─────────────────────────────────────────
