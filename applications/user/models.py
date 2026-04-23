@@ -31,6 +31,7 @@ class ActivityActionType(str, Enum):
     TOPIC_CREATED        = "topic_created"
     EVENT_CREATED        = "event_created"
     TRAINING_REGISTERED  = "training_registered"
+    TRAINING_CREATED     = "training_created"
     DOCUMENT_UPLOADED    = "document_uploaded"
     MODERATION_FLAG      = "moderation_flag"
     POST_FORWARDED       = "post_forwarded"  # ← added per docs §4.3
