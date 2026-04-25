@@ -35,6 +35,10 @@ class ActivityActionType(str, Enum):
     DOCUMENT_UPLOADED    = "document_uploaded"
     MODERATION_FLAG      = "moderation_flag"
     POST_FORWARDED       = "post_forwarded"  # ← added per docs §4.3
+    COMMISSION_CREATED   = "commission_created"  # ← added per docs §5.1
+    COMMISSION_MEMBER_ADDED = "commission_member_added"  # ← added per docs §5.1
+    COMMISSION_MEMBER_REMOVED = "commission_member_removed"  # ← added per docs §5.1
+    DOCUMENT_DELETED     = "document_deleted"  # ← added per docs §6.2
 
 
 # ─────────────────────────────────────────
@@ -218,7 +222,7 @@ class ActivityLog(models.Model):
     """
     id          = fields.UUIDField(pk=True, default=uuid.uuid4)
     user        = fields.ForeignKeyField("models.User", related_name="activity_logs", on_delete=fields.CASCADE)
-    action_type = fields.CharEnumField(ActivityActionType)
+    action_type = fields.CharEnumField(ActivityActionType, max_length=100)
     target_type = fields.CharField(max_length=50, null=True)   # "article" | "post" | "event" | "training" | "user"
     target_id   = fields.UUIDField(null=True)
     description = fields.TextField(null=True)
