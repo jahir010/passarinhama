@@ -54,7 +54,7 @@ TORTOISE_ORM = {
     },
     "apps": get_apps_structure("applications"),
     "use_tz": True,
-    "timezone": "Asia/Dhaka",
+    "timezone": "UTC",
 }
 import json
 print(json.dumps(TORTOISE_ORM, indent=4))

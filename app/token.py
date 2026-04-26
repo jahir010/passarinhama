@@ -273,5 +273,8 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been suspended.",
         )
+    # ── Online presence: touch last_seen_at on every authenticated request ──
+    
+    await User.filter(id=user.id).update(last_seen_at=datetime.now(timezone.utc))
 
     return user
