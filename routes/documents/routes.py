@@ -238,7 +238,7 @@ async def create_folder(
 async def rename_folder(
     folder_id:    uuid.UUID,
     body:         FolderUpdate,
-    current_user: User = Depends(role_required(UserRole.ADMIN)),
+    current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR)),
 ):
     """
     Rename a folder or update its color (admin only).
@@ -264,7 +264,7 @@ async def set_folder_permission(
     role:       UserRole,
     can_read:   bool,
     can_upload: bool,
-    current_user: User = Depends(role_required(UserRole.ADMIN)),
+    current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR)),
 ):
     """
     Set read/upload access for a specific role on a folder (admin only).
