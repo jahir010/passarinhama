@@ -83,6 +83,7 @@ async def list_forums(current_user: User = Depends(get_current_user)):
     for p in perms:
         forum = p.forum
         topic_count = await Topic.filter(forum=forum).count()
+        post_count = await Post.filter(topic__forum=forum).count()
         last_topic  = await Topic.filter(forum=forum).order_by("-last_activity_at").first()
         result.append({
             "id":               str(forum.id),
@@ -91,6 +92,7 @@ async def list_forums(current_user: User = Depends(get_current_user)):
             "description":      forum.description,
             "forum_type":       forum.forum_type,
             "topic_count":      topic_count,
+            "post_count":       post_count,
             "last_activity_at": last_topic.last_activity_at if last_topic else None,
             "can_post":         p.can_post,
         })
@@ -466,9 +468,12 @@ async def create_post(
         )
         topic_author = await topic.author
         if topic_author.id != current_user.id:
-            await send_email(
-                topic_author, NotificationType.POST_REPLY, "post", post.id, background_tasks
-            )
+            try:
+                await send_email(
+                    topic_author, NotificationType.POST_REPLY, "post", post.id, background_tasks
+                )
+            except Exception as e:
+                pass
 
     await log_activity(current_user, ActivityActionType.POST_CREATED, "post", post.id)
     return {

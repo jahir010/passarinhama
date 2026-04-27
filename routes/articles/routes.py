@@ -90,6 +90,27 @@ async def create_article(body: ArticleCreate, current_user: User = Depends(role_
     )
     await log_activity(current_user, ActivityActionType.ARTICLE_PUBLISHED, "article", article.id, body.title)
     return article
+
+
+@router.get("/my-articles", tags=["Articles"])
+async def list_my_articles(
+    status: ArticleStatus | None = None,
+    author_id: uuid.UUID | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user)
+):
+    """List articles authored by the current user. Optional status filter.
+    """
+    if author_id:
+        qs = Article.filter(author_id=author_id)
+    else:
+        qs = Article.filter(author=current_user)
+    if status:
+        qs = qs.filter(status=status)
+    total    = await qs.count()
+    articles = await qs.offset((page - 1) * page_size).limit(page_size).prefetch_related("category")
+    return {"total": total, "page": page, "results": articles}
  
  
 @router.get("/articles/{article_id}", tags=["Articles"])
