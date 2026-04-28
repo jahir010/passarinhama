@@ -1,33 +1,104 @@
-from fastapi import APIRouter, Depends
+# from fastapi import APIRouter, Depends
+# import uuid
+# from pydantic import BaseModel
+
+# from applications.notifications.notifications import NotificationPreference, NotificationType
+# from applications.user.models import User
+
+# from app.auth import role_required
+# from app.token import get_current_user
+
+
+
+# router = APIRouter()
+
+
+# # ── Notifications ─────────────────────────
+ 
+# class NotificationPrefUpdate(BaseModel):
+#     notification_type: NotificationType
+#     forum_id:          uuid.UUID | None = None
+#     email_enabled:     bool
+
+
+# @router.get("/notifications/preferences", tags=["Notifications"])
+# async def get_notification_preferences(current_user: User = Depends(get_current_user)):
+#     return await NotificationPreference.filter(user=current_user).prefetch_related("forum")
+ 
+ 
+# @router.patch("/notifications/preferences", tags=["Notifications"])
+# async def update_notification_preference(body: NotificationPrefUpdate, current_user: User = Depends(get_current_user)):
+#     pref, _ = await NotificationPreference.get_or_create(
+#         user=current_user,
+#         notification_type=body.notification_type,
+#         forum_id=body.forum_id,
+#         defaults={"email_enabled": body.email_enabled},
+#     )
+#     pref.email_enabled = body.email_enabled
+#     await pref.save(update_fields=["email_enabled"])
+#     return pref
+
+
+
+
+
+
+
+
+
+
+
+
 import uuid
+from datetime import UTC, datetime
+ 
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
-
-from applications.notifications.notifications import NotificationPreference, NotificationType
-from applications.user.models import User
-
+ 
+from applications.notifications.notifications import (
+    NotificationLog,
+    NotificationPreference,
+    NotificationType,
+)
+from applications.user.models import User, UserRole, UserStatus
 from app.auth import role_required
 from app.token import get_current_user
+from applications.articles.models import Article, ArticleStatus
 
-
-
+ 
 router = APIRouter()
-
-
-# ── Notifications ─────────────────────────
+ 
+ 
+# ── Notifications ────────────────────────────────────────────────────────────
+ 
  
 class NotificationPrefUpdate(BaseModel):
     notification_type: NotificationType
-    forum_id:          uuid.UUID | None = None
-    email_enabled:     bool
-
-
+    forum_id: uuid.UUID | None = None
+    email_enabled: bool
+ 
+ 
 @router.get("/notifications/preferences", tags=["Notifications"])
-async def get_notification_preferences(current_user: User = Depends(get_current_user)):
-    return await NotificationPreference.filter(user=current_user).prefetch_related("forum")
+async def get_notification_preferences(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the current user's notification preferences.
+    If no rows exist yet (e.g. legacy accounts), seed defaults first so
+    the UI always gets a complete list rather than an empty array.
+    """
+    prefs = await NotificationPreference.filter(user=current_user).prefetch_related("forum")
+    if not prefs:
+        await NotificationPreference.create_defaults(current_user.id)
+        prefs = await NotificationPreference.filter(user=current_user).prefetch_related("forum")
+    return prefs
  
  
 @router.patch("/notifications/preferences", tags=["Notifications"])
-async def update_notification_preference(body: NotificationPrefUpdate, current_user: User = Depends(get_current_user)):
+async def update_notification_preference(
+    body: NotificationPrefUpdate,
+    current_user: User = Depends(get_current_user),
+):
     pref, _ = await NotificationPreference.get_or_create(
         user=current_user,
         notification_type=body.notification_type,
@@ -35,5 +106,7 @@ async def update_notification_preference(body: NotificationPrefUpdate, current_u
         defaults={"email_enabled": body.email_enabled},
     )
     pref.email_enabled = body.email_enabled
-    await pref.save(update_fields=["email_enabled"])
+    await pref.save(update_fields=["email_enabled", "updated_at"])
     return pref
+
+

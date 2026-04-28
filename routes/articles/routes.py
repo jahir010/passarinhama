@@ -8,12 +8,13 @@ from datetime import datetime, timezone as UTC
 
 from app.auth import login_required, role_required
 from app.token import get_current_user
-from app.utils.file_manager import delete_file, update_file
+from app.utils.file_manager import delete_file, update_file, save_file
 from applications.articles.models import Article, ArticleCategory, ArticleStatus
 from applications.user.models import  Group, Permission, User, UserRole, UserStatus, MembershipCategory, ActivityActionType, ActivityLog
 from applications.notifications.notifications import NotificationType, NotificationLog, NotificationPreference
 from routes.user.routes import log_activity
-from app.utils.send_email import send_email
+from app.utils.send_email import send_email, send_bulk_email
+import json
 
 
 
@@ -31,6 +32,7 @@ class ArticleCreate(BaseModel):
     body:              str | None = None
     youtube_url:       str | None = None
     structured_fields: dict | None = None
+    
  
 class ArticleUpdate(ArticleCreate):
     title:       str | None = None
@@ -46,6 +48,89 @@ class ArticleOut(BaseModel):
  
     class Config:
         from_attributes = True
+
+
+
+async def _notify_new_article(article_id: uuid.UUID, article_title: str) -> None:
+    """
+    Background task: send NEW_ARTICLE emails only to users who:
+      - are active, payment-validated, and not deleted
+      - have NOT opted out of NEW_ARTICLE notifications
+ 
+    Sends in chunks of 50 to stay within SMTP rate limits, then writes
+    a single-batch audit log so the NotificationLog table stays accurate.
+    """
+    # 1. Resolve opted-in user IDs (excludes explicit opt-outs)
+    opted_in_ids = await NotificationPreference.opted_in_user_ids(
+        NotificationType.NEW_ARTICLE
+    )
+    if not opted_in_ids:
+        return
+ 
+    # 2. Filter to only eligible users and fetch their emails
+    users = await User.filter(
+        id__in=opted_in_ids,
+        status=UserStatus.ACTIVE,
+        is_payment_validated=True,
+        is_deleted=False,
+    ).values("id", "email", "first_name")
+ 
+    if not users:
+        return
+ 
+    emails     = [u["email"] for u in users]
+    user_ids   = [u["id"]    for u in users]
+ 
+    # 3. Build a clean HTML email — never interpolate raw model objects
+    html_body = f"""
+    <html>
+      <body style="font-family: sans-serif; color: #333;">
+        <h2>New Article Published</h2>
+        <p>A new article is now available on the platform:</p>
+        <p><strong>{article_title}</strong></p>
+        <p>
+          <a href="https://yourplatform.com/articles/{article_id}"
+             style="background:#4F46E5;color:#fff;padding:10px 20px;
+                    border-radius:6px;text-decoration:none;">
+            Read Article
+          </a>
+        </p>
+        <hr/>
+        <small>
+          You're receiving this because you subscribed to article notifications.
+          <a href="https://yourplatform.com/settings/notifications">Unsubscribe</a>
+        </small>
+      </body>
+    </html>
+    """
+ 
+    # 4. Send in chunks — respects SMTP rate limits
+    result = await send_bulk_email(
+        subject=f"New Article: {article_title}",
+        recipients=emails,
+        html_message=html_body,
+        chunk_size=50,
+        chunk_delay=1.0,
+        retries=1,
+    )
+ 
+    # 5. Write one log row per recipient in a single DB round-trip
+    if result["sent"] > 0:
+        await NotificationLog.bulk_create_for_users(
+            user_ids=user_ids,
+            notification_type=NotificationType.NEW_ARTICLE,
+            target_type="article",
+            target_id=article_id,
+        )
+ 
+    print(
+        f"[notify] article={article_id} sent={result['sent']} failed={result['failed']}",
+        flush=True,
+    )
+
+
+
+
  
 @router.get("/articles", tags=["Articles"])
 async def list_articles(
@@ -77,18 +162,46 @@ async def list_articles(
     return {"total": total, "page": page, "results": articles}
  
  
+
 @router.post("/articles", tags=["Articles"], status_code=201)
-async def create_article(body: ArticleCreate, current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR))):
-    """Create a new article (admin/moderator)."""
-    category = await ArticleCategory.get_or_none(id=body.category_id)
+async def create_article(
+    title: str = Form(...),
+    category_id: uuid.UUID = Form(...),
+    excerpt: str = Form(None),
+    body: str = Form(None),
+    youtube_url: str = Form(None),
+    structured_fields: str = Form(None),  # JSON string
+    files: list[UploadFile] = File(None),
+    current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR, UserRole.MEMBRE))
+):
+    category = await ArticleCategory.get_or_none(id=category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found.")
+
+    # parse structured_fields JSON string → dict
+    import json
+    parsed_structured_fields = json.loads(structured_fields) if structured_fields else {}
+
+    # handle files
+    if files:
+        file_urls = []
+        for upload in files:
+            url = await save_file(upload, upload_to="articles")
+            file_urls.append(url)
+        parsed_structured_fields["file_urls"] = file_urls
+
     article = await Article.create(
-        title=body.title, category=category, excerpt=body.excerpt,
-        body=body.body, youtube_url=body.youtube_url,
-        structured_fields=body.structured_fields, author=current_user,
+        title=title,
+        category=category,
+        excerpt=excerpt,
+        body=body,
+        youtube_url=youtube_url,
+        structured_fields=parsed_structured_fields,
+        author=current_user,
     )
-    await log_activity(current_user, ActivityActionType.ARTICLE_PUBLISHED, "article", article.id, body.title)
+
+    await log_activity(current_user, ActivityActionType.ARTICLE_PUBLISHED, "article", article.id, title)
+
     return article
 
 
@@ -125,14 +238,89 @@ async def get_article(article_id: uuid.UUID, current_user: User | None = Depends
     return article
  
  
+# @router.patch("/articles/{article_id}", tags=["Articles"])
+# async def update_article(article_id: uuid.UUID, body: ArticleUpdate, current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR))):
+#     article = await Article.get_or_none(id=article_id)
+#     if not article:
+#         raise HTTPException(status_code=404, detail="Article not found.")
+#     for field, value in body.model_dump(exclude_none=True).items():
+#         setattr(article, field, value)
+#     await article.save()
+#     return article
+
+
+
 @router.patch("/articles/{article_id}", tags=["Articles"])
-async def update_article(article_id: uuid.UUID, body: ArticleUpdate, current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR))):
+async def update_article(
+    article_id: uuid.UUID,
+
+    title: str = Form(None),
+    category_id: uuid.UUID = Form(None),
+    excerpt: str = Form(None),
+    body: str = Form(None),
+    youtube_url: str = Form(None),
+    structured_fields: str = Form(None),  # JSON string
+
+    files: list[UploadFile] = File(None),
+
+    current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR)),
+):
     article = await Article.get_or_none(id=article_id)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found.")
-    for field, value in body.model_dump(exclude_none=True).items():
-        setattr(article, field, value)
+
+    # category update (if provided)
+    if category_id:
+        category = await ArticleCategory.get_or_none(id=category_id)
+        if not category:
+            raise HTTPException(status_code=404, detail="Category not found.")
+        article.category = category
+
+    # parse structured_fields safely
+    parsed_structured_fields = article.structured_fields or {}
+    if structured_fields:
+        try:
+            parsed_structured_fields.update(json.loads(structured_fields))
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid structured_fields JSON.")
+
+    # handle file uploads
+    if files:
+        file_urls = []
+        if article.structured_fields and article.structured_fields["file_urls"]:
+            for url in article.structured_fields["file_urls"]:
+                await delete_file(url)
+
+        for upload in files:
+            url = await save_file(upload, upload_to="articles")
+            file_urls.append(url)
+
+        parsed_structured_fields["file_urls"] = (
+            parsed_structured_fields.get("file_urls", []) + file_urls
+        )
+
+    # update fields if provided
+    if title is not None:
+        article.title = title
+    if excerpt is not None:
+        article.excerpt = excerpt
+    if body is not None:
+        article.body = body
+    if youtube_url is not None:
+        article.youtube_url = youtube_url
+
+    article.structured_fields = parsed_structured_fields
+
     await article.save()
+
+    await log_activity(
+        current_user,
+        ActivityActionType.ARTICLE_UPDATED,
+        "article",
+        article.id,
+        article.title,
+    )
+
     return article
  
  
@@ -150,10 +338,10 @@ async def publish_article(
         article.status       = ArticleStatus.PUBLISHED
         article.published_at = datetime.now(UTC.utc)
         await article.save(update_fields=["status", "published_at"])
-        # Notify all subscribed users
-        users = await User.filter(status=UserStatus.ACTIVE, is_payment_validated=True, is_deleted=False)
-        for user in users:
-            await send_email(subject="New Article Published: " + article.title, to=user.email, message=f'"user": {user}, "article": {article}')
+        try:
+            background_tasks.add_task(_notify_new_article, article.id, article.title)
+        except Exception as e:
+            print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
     else:
         article.status = ArticleStatus.DRAFT
         await article.save(update_fields=["status"])
@@ -163,6 +351,10 @@ async def publish_article(
 @router.delete("/articles/{article_id}", status_code=204, tags=["Articles"])
 async def delete_article(article_id: uuid.UUID, current_user: User = Depends(role_required(UserRole.ADMIN))):
     article = await Article.get_or_none(id=article_id)
+    if article and article.structured_fields["file_urls"]:
+        for url in article.structured_fields["file_urls"]:
+            print(f"Deleting file from article deletion: {url}", flush=True)
+            await delete_file(url)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found.")
     await article.delete()

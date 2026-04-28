@@ -30,6 +30,7 @@ class ActivityActionType(str, Enum):
     USER_REGISTERED           = "user_registered"
     USER_VALIDATED            = "user_validated"
     ARTICLE_PUBLISHED         = "article_published"
+    ARTICLE_UPDATED           = "article_updated"
     POST_CREATED              = "post_created"
     POST_APPROVED             = "post_approved"
     POST_REJECTED             = "post_rejected"
