@@ -434,8 +434,8 @@ from app.utils.file_manager import save_file, delete_file, update_file
 
 from applications.trainings.models import Training, TrainingFormat, TrainingStatus, TrainingRegistration
 from applications.user.models import User, UserRole, ActivityActionType, UserStatus
-from applications.notifications.notifications import NotificationType, NotificationPreference
-from app.utils.send_email import send_email
+from applications.notifications.notifications import NotificationLog, NotificationType, NotificationPreference
+from app.utils.send_email import send_bulk_email, send_email
 
 
 router = APIRouter()
@@ -491,6 +491,86 @@ class TrainingUpdate(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared serialiser
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+
+
+async def _notify_new_training(training_id: uuid.UUID, training_title: str) -> None:
+    """
+    Background task: send NEW_TRAINING emails only to users who:
+      - are active, payment-validated, and not deleted
+      - have NOT opted out of NEW_TRAINING notifications
+ 
+    Sends in chunks of 50 to stay within SMTP rate limits, then writes
+    a single-batch audit log so the NotificationLog table stays accurate.
+    """
+    # 1. Resolve opted-in user IDs (excludes explicit opt-outs)
+    opted_in_ids = await NotificationPreference.opted_in_user_ids(
+        NotificationType.NEW_TRAINING
+    )
+    if not opted_in_ids:
+        return
+ 
+    # 2. Filter to only eligible users and fetch their emails
+    users = await User.filter(
+        id__in=opted_in_ids,
+        status=UserStatus.ACTIVE,
+        is_payment_validated=True,
+        is_deleted=False,
+    ).values("id", "email", "first_name")
+ 
+    if not users:
+        return
+ 
+    emails     = [u["email"] for u in users]
+    user_ids   = [u["id"]    for u in users]
+ 
+    # 3. Build a clean HTML email — never interpolate raw model objects
+    html_body = f"""
+    <html>
+      <body style="font-family: sans-serif; color: #333;">
+        <h2>New Training Published</h2>
+        <p>A new training is now available on the platform:</p>
+        <p><strong>{training_title}</strong></p>
+        <p>
+          <a href="https://yourplatform.com/trainings/{training_id}"
+             style="background:#4F46E5;color:#fff;padding:10px 20px;
+                    border-radius:6px;text-decoration:none;">
+            Read Training
+          </a>
+        </p>
+        <hr/>
+        <small>
+          You're receiving this because you subscribed to training notifications.
+          <a href="https://yourplatform.com/settings/notifications">Unsubscribe</a>
+        </small>
+      </body>
+    </html>
+    """
+ 
+    # 4. Send in chunks — respects SMTP rate limits
+    result = await send_bulk_email(
+        subject=f"New Training: {training_title}",
+        recipients=emails,
+        html_message=html_body,
+        chunk_size=50,
+        chunk_delay=1.0,
+        retries=1,
+    )
+ 
+    # 5. Write one log row per recipient in a single DB round-trip
+    if result["sent"] > 0:
+        await NotificationLog.bulk_create_for_users(
+            user_ids=user_ids,
+            notification_type=NotificationType.NEW_TRAINING,
+            target_type="training",
+            target_id=training_id,
+        )
+ 
+    print(
+        f"[notify] training={training_id} sent={result['sent']} failed={result['failed']}",
+        flush=True,
+    )
 
 async def _serialize_training(training: Training, current_user: User | None = None) -> dict:
     """
@@ -706,13 +786,10 @@ async def create_training(
         email_enabled=True,
     ).prefetch_related("user")
 
-    for pref in prefs:
-        user = pref.user
-        if user.status == UserStatus.ACTIVE and user.is_payment_validated and not user.is_deleted:
-            # await send_email(
-            #     user, NotificationType.NEW_TRAINING, "training", training.id, background_tasks
-            # )
-            pass
+    try:
+        background_tasks.add_task(_notify_new_training, training.id, training.title)
+    except Exception as e:
+        print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
 
     return await _serialize_training(training, current_user)
 

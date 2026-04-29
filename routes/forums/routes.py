@@ -14,10 +14,10 @@ from applications.forums.models import (
     Topic, Post, ModerationLog,
 )
 from applications.user.models import (
-    User, UserRole, ActivityActionType,
+    User, UserRole, ActivityActionType, UserStatus,
 )
-from applications.notifications.notifications import NotificationType
-from app.utils.send_email import send_email
+from applications.notifications.notifications import NotificationLog, NotificationPreference, NotificationType
+from app.utils.send_email import send_bulk_email, send_email
 from app.utils.file_manager import save_file, update_file, delete_file
 
 
@@ -58,6 +58,87 @@ def _slugify(text: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # FORUMS
 # ══════════════════════════════════════════════════════════════════════════════
+
+async def _notify_new_post(post_id: uuid.UUID, post_title: str) -> None:
+    """
+    Background task: send NEW_POST emails only to users who:
+      - are active, payment-validated, and not deleted
+      - have NOT opted out of NEW_POST notifications
+ 
+    Sends in chunks of 50 to stay within SMTP rate limits, then writes
+    a single-batch audit log so the NotificationLog table stays accurate.
+    """
+    # 1. Resolve opted-in user IDs (excludes explicit opt-outs)
+    opted_in_ids = await NotificationPreference.opted_in_user_ids(
+        NotificationType.NEW_POST
+    )
+    if not opted_in_ids:
+        return
+ 
+    # 2. Filter to only eligible users and fetch their emails
+    users = await User.filter(
+        id__in=opted_in_ids,
+        status=UserStatus.ACTIVE,
+        is_payment_validated=True,
+        is_deleted=False,
+    ).values("id", "email", "first_name")
+ 
+    if not users:
+        return
+ 
+    emails     = [u["email"] for u in users]
+    user_ids   = [u["id"]    for u in users]
+ 
+    # 3. Build a clean HTML email — never interpolate raw model objects
+    html_body = f"""
+    <html>
+      <body style="font-family: sans-serif; color: #333;">
+        <h2>New Post Published</h2>
+        <p>A new post is now available on the platform:</p>
+        <p><strong>{post_title}</strong></p>
+        <p>
+          <a href="https://yourplatform.com/posts/{post_id}"
+             style="background:#4F46E5;color:#fff;padding:10px 20px;
+                    border-radius:6px;text-decoration:none;">
+            Read Post
+          </a>
+        </p>
+        <hr/>
+        <small>
+          You're receiving this because you subscribed to post notifications.
+          <a href="https://yourplatform.com/settings/notifications">Unsubscribe</a>
+        </small>
+      </body>
+    </html>
+    """
+ 
+    # 4. Send in chunks — respects SMTP rate limits
+    result = await send_bulk_email(
+        subject=f"New Post: {post_title}",
+        recipients=emails,
+        html_message=html_body,
+        chunk_size=50,
+        chunk_delay=1.0,
+        retries=1,
+    )
+ 
+    # 5. Write one log row per recipient in a single DB round-trip
+    if result["sent"] > 0:
+        await NotificationLog.bulk_create_for_users(
+            user_ids=user_ids,
+            notification_type=NotificationType.NEW_POST,
+            target_type="post",
+            target_id=post_id,
+        )
+ 
+    print(
+        f"[notify] post={post_id} sent={result['sent']} failed={result['failed']}",
+        flush=True,
+    )
+
+
+
+
 
 @router.get("/forums", tags=["Forums"])
 async def list_forums(current_user: User = Depends(get_current_user)):
@@ -417,7 +498,10 @@ async def list_posts(
     # FIX: atomic increment — no race condition
     await Topic.filter(id=topic_id).update(view_count=F("view_count") + 1)
 
-    qs    = Post.filter(topic=topic, moderation_status=ModerationStatus.APPROVED)
+    if current_user.role in (UserRole.ADMIN, UserRole.MODERATOR):
+        qs = Post.filter(topic=topic)
+    else:
+        qs    = Post.filter(topic=topic, moderation_status=ModerationStatus.APPROVED)
     total = await qs.count()
     posts = (
         await qs
@@ -593,7 +677,7 @@ async def moderate_post(
 
     Spec ref: §13.2, §14.1
     """
-    post = await Post.get_or_none(id=post_id)
+    post = await Post.get_or_none(id=post_id).prefetch_related("author", "topic")
     if not post:
         raise HTTPException(status_code=404, detail="Post not found.")
 
@@ -610,9 +694,10 @@ async def moderate_post(
             last_activity_at=datetime.now(UTC.utc),
         )
         post_author = await post.author
-        # await send_email(
-        #     post_author, NotificationType.NEW_POST, "post", post.id, background_tasks
-        # )
+        try:
+            background_tasks.add_task(_notify_new_post, post.id, post.content)
+        except Exception as e:
+            print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
         log_action_type = ActivityActionType.POST_APPROVED
 
     elif body.action == ModerationAction.REJECT:
@@ -628,6 +713,14 @@ async def moderate_post(
         # await send_email(
         #     author, NotificationType.POST_REJECTED, "post", post.id, background_tasks
         # )
+        try:
+            await send_email(subject="Your post was rejected", to=author.email, html_message=f"""
+                <html><body>
+                    <p>Your post has been rejected.</p>
+                </body></html>
+            """)
+        except Exception as e:
+            print(f"[notify] Failed to send rejection email: {e}", flush=True)
         log_action_type = ActivityActionType.POST_REJECTED
 
     elif body.action == ModerationAction.FLAG:

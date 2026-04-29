@@ -10,8 +10,8 @@ from app.utils.helper_functions import log_activity
 
 from applications.events.models import Event, EventRegistration, EventType
 from applications.user.models import User, UserStatus, UserRole, ActivityActionType
-from applications.notifications.notifications import NotificationType, NotificationPreference
-from app.utils.send_email import send_email
+from applications.notifications.notifications import NotificationLog, NotificationType, NotificationPreference
+from app.utils.send_email import send_bulk_email, send_email
 
 
 router = APIRouter()
@@ -87,6 +87,83 @@ class EventUpdate(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared serialiser
 # ──────────────────────────────────────────────────────────────────────────────
+
+async def _notify_new_event(event_id: uuid.UUID, event_title: str) -> None:
+    """
+    Background task: send NEW_EVENT emails only to users who:
+      - are active, payment-validated, and not deleted
+      - have NOT opted out of NEW_EVENT notifications
+ 
+    Sends in chunks of 50 to stay within SMTP rate limits, then writes
+    a single-batch audit log so the NotificationLog table stays accurate.
+    """
+    # 1. Resolve opted-in user IDs (excludes explicit opt-outs)
+    opted_in_ids = await NotificationPreference.opted_in_user_ids(
+        NotificationType.NEW_EVENT
+    )
+    if not opted_in_ids:
+        return
+ 
+    # 2. Filter to only eligible users and fetch their emails
+    users = await User.filter(
+        id__in=opted_in_ids,
+        status=UserStatus.ACTIVE,
+        is_payment_validated=True,
+        is_deleted=False,
+    ).values("id", "email", "first_name")
+ 
+    if not users:
+        return
+ 
+    emails     = [u["email"] for u in users]
+    user_ids   = [u["id"]    for u in users]
+ 
+    # 3. Build a clean HTML email — never interpolate raw model objects
+    html_body = f"""
+    <html>
+      <body style="font-family: sans-serif; color: #333;">
+        <h2>New Event Created</h2>
+        <p>A new event is now available on the platform:</p>
+        <p><strong>{event_title}</strong></p>
+        <p>
+          <a href="https://yourplatform.com/events/{event_id}"
+             style="background:#4F46E5;color:#fff;padding:10px 20px;
+                    border-radius:6px;text-decoration:none;">
+            View Event
+          </a>
+        </p>
+        <hr/>
+        <small>
+          You're receiving this because you subscribed to event notifications.
+          <a href="https://yourplatform.com/settings/notifications">Unsubscribe</a>
+        </small>
+      </body>
+    </html>
+    """
+ 
+    # 4. Send in chunks — respects SMTP rate limits
+    result = await send_bulk_email(
+        subject=f"New Event: {event_title}",
+        recipients=emails,
+        html_message=html_body,
+        chunk_size=50,
+        chunk_delay=1.0,
+        retries=1,
+    )
+ 
+    # 5. Write one log row per recipient in a single DB round-trip
+    if result["sent"] > 0:
+        await NotificationLog.bulk_create_for_users(
+            user_ids=user_ids,
+            notification_type=NotificationType.NEW_EVENT,
+            target_type="event",
+            target_id=event_id,
+        )
+ 
+    print(
+        f"[notify] event={event_id} sent={result['sent']} failed={result['failed']}",
+        flush=True,
+    )
 
 def _format_event_time(t) -> str | None:
     """
@@ -285,10 +362,10 @@ async def create_event(
         email_enabled=True,
     ).prefetch_related("user")
 
-    for pref in prefs:
-        user = pref.user
-        if user.status == UserStatus.ACTIVE and user.is_payment_validated and not user.is_deleted:
-            await send_email(user, NotificationType.NEW_EVENT, "event", event.id, background_tasks)
+    try:
+        background_tasks.add_task(_notify_new_event, event.id, event.title)
+    except Exception as e:
+        print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
 
     return await _serialize_event(event, current_user)
 
