@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 import re
 
@@ -26,6 +27,10 @@ router = APIRouter()
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+class UserSignupRole(str, Enum):
+    MEMBRE  = "membre"
 
 
 
@@ -279,7 +284,7 @@ async def signup(
     email:      str      = Form(...),
     password:   str      = Form(...),
     otp_value:  str      = Form(...),
-    role:       UserRole = Form(...),
+    role:       UserSignupRole = Form(None),
 ):
     email      = _normalize_email(email)
     await detect_input_type(email)

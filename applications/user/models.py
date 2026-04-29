@@ -136,7 +136,7 @@ class User(models.Model):
     country              = fields.CharField(max_length=100, default="France")
 
     # ── Role & status ─────────────────────────────────────────────────────
-    role                 = fields.CharEnumField(UserRole, default=UserRole.AUDITEUR)
+    role                 = fields.CharEnumField(UserRole, default=UserRole.MEMBRE)
     status               = fields.CharEnumField(UserStatus, default=UserStatus.PENDING)
     membership_category  = fields.ForeignKeyField(
         "models.MembershipCategory",
