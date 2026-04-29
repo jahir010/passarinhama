@@ -498,10 +498,10 @@ async def list_posts(
     # FIX: atomic increment — no race condition
     await Topic.filter(id=topic_id).update(view_count=F("view_count") + 1)
 
-    if current_user.role in (UserRole.ADMIN, UserRole.MODERATOR):
-        qs = Post.filter(topic=topic)
-    else:
-        qs    = Post.filter(topic=topic, moderation_status=ModerationStatus.APPROVED)
+    # if current_user.role in (UserRole.ADMIN, UserRole.MODERATOR):
+    #     qs = Post.filter(topic=topic)
+    # else:
+    qs    = Post.filter(topic=topic, moderation_status=ModerationStatus.APPROVED)
     total = await qs.count()
     posts = (
         await qs
