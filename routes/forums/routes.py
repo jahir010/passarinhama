@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, BackgroundTasks
 from tortoise.transactions import in_transaction
 from tortoise.expressions import Q, F
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from applications.user.models import (
 )
 from applications.notifications.notifications import NotificationType
 from app.utils.send_email import send_email
+from app.utils.file_manager import save_file, update_file, delete_file
 
 
 router = APIRouter()
@@ -163,6 +164,22 @@ async def set_forum_permission(
     perm.can_post = can_post
     await perm.save()
     return perm
+
+
+@router.get("/forums/{forum_id}/permissions", tags=["Forums"])
+async def get_forum_permissions(
+    forum_id: uuid.UUID,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    """
+    Get the read/post permissions for all roles on a forum (admin only).
+    Spec ref: §15.5
+    """
+    forum = await Forum.get_or_none(id=forum_id)
+    if not forum:
+        raise HTTPException(status_code=404, detail="Forum not found.")
+    perms = await ForumRolePermission.filter(forum=forum).all()
+    return perms
 
 
 # ── Topics ─────────────────────────────────────────────────────────────────
@@ -386,7 +403,6 @@ async def list_posts(
           }, ...
         ]
       }
-    Spec ref: §7.2, §7.3
     """
     topic = await Topic.get_or_none(id=topic_id)
     if not topic:
@@ -410,6 +426,7 @@ async def list_posts(
         {
             "id":                str(p.id),
             "content":           p.content,
+            "attachment":        p.attachment,
             "moderation_status": p.moderation_status,
             "created_at":        p.created_at,
             "updated_at":        p.updated_at,
@@ -428,8 +445,9 @@ async def list_posts(
 @router.post("/topics/{topic_id}/posts", tags=["Forums"], status_code=201)
 async def create_post(
     topic_id:         uuid.UUID,
-    body:             PostCreate,
     background_tasks: BackgroundTasks,
+    content:          str = Form(...),
+    files:            list[UploadFile] = File(None),
     current_user:     User = Depends(get_current_user),
 ):
     """
@@ -452,10 +470,17 @@ async def create_post(
 
     auto_approve = current_user.role in (UserRole.ADMIN, UserRole.MODERATOR)
 
+    if files:
+        attachments = []
+        for f in files:
+            file_url = await save_file(file=f, upload_to="post_attachments")
+            attachments.append(file_url)
+
     post = await Post.create(
         topic=topic,
         author=current_user,
-        content=body.content,
+        content=content,
+        attachment=attachments if files else None,
         moderation_status=ModerationStatus.APPROVED if auto_approve else ModerationStatus.PENDING,
         moderated_at=datetime.now(UTC.utc) if auto_approve else None,
         moderated_by=current_user if auto_approve else None,
@@ -479,6 +504,7 @@ async def create_post(
     return {
         "id":                str(post.id),
         "content":           post.content,
+        "attachment":        post.attachment,
         "moderation_status": post.moderation_status,
         "created_at":        post.created_at,
         "message": (

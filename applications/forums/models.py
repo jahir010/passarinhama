@@ -245,6 +245,7 @@ class Post(models.Model):
     topic             = fields.ForeignKeyField("models.Topic", related_name="posts", on_delete=fields.CASCADE)
     author            = fields.ForeignKeyField("models.User", related_name="posts", on_delete=fields.RESTRICT)
     content           = fields.TextField()
+    attachment        = fields.JSONField(null=True)  # e.g. {"url": "...", "type": "image/png"}
     moderation_status = fields.CharEnumField(ModerationStatus, default=ModerationStatus.PENDING)
     moderated_by      = fields.ForeignKeyField(
         "models.User",
