@@ -129,6 +129,30 @@ async def _notify_new_article(article_id: uuid.UUID, article_title: str) -> None
     )
 
 
+async def _article_serialize(article: Article) -> dict:
+    """Convert Article model instance to dict for email content interpolation."""
+    return {
+        "id": article.id,
+        "title": article.title,
+        "excerpt": article.excerpt,
+        "body": article.body,
+        "youtube_url": article.youtube_url,
+        "structured_fields": article.structured_fields,
+        "status": article.status,
+        "published_at": article.published_at.isoformat() if article.published_at else None,
+        "created_at": article.created_at.isoformat(),
+        "author": {
+            "id": article.author.id,
+            "name": article.author.first_name,
+            "email": article.author.email
+        },
+        "category": {
+            "id": article.category.id,
+            "name": article.category.name
+        }
+    }
+
+
 
 
  
@@ -159,7 +183,7 @@ async def list_articles(
  
     total    = await qs.count()
     articles = await qs.offset((page - 1) * page_size).limit(page_size).prefetch_related("author", "category")
-    return {"total": total, "page": page, "results": articles}
+    return {"total": total, "page": page, "results": [await _article_serialize(a) for a in articles]}
  
  
 
@@ -222,20 +246,20 @@ async def list_my_articles(
     if status:
         qs = qs.filter(status=status)
     total    = await qs.count()
-    articles = await qs.offset((page - 1) * page_size).limit(page_size).prefetch_related("category")
-    return {"total": total, "page": page, "results": articles}
+    articles = await qs.offset((page - 1) * page_size).limit(page_size).prefetch_related("author", "category")
+    return {"total": total, "page": page, "results": [await _article_serialize(a) for a in articles]}
  
  
 @router.get("/articles/{article_id}", tags=["Articles"])
 async def get_article(article_id: uuid.UUID, current_user: User | None = Depends(get_current_user)):
-    article = await Article.get_or_none(id=article_id)
+    article = await Article.get_or_none(id=article_id).prefetch_related("author", "category")
     if not article:
         raise HTTPException(status_code=404, detail="Article not found.")
     if article.status == ArticleStatus.DRAFT:
         if not current_user or current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
             if not current_user or current_user.id != article.author_id:
                 raise HTTPException(status_code=403, detail="Draft articles are restricted.")
-    return article
+    return await _article_serialize(article)
  
  
 # @router.patch("/articles/{article_id}", tags=["Articles"])

@@ -4,12 +4,13 @@ import uuid
 from datetime import datetime, timezone as UTC, timedelta
 
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from tortoise.expressions import Q
 from pydantic import BaseModel, EmailStr, Field, computed_field
 
 from app.auth import role_required
 from app.token import get_current_user
+from app.utils.send_email import send_email
 from applications.user.models import (
     Group, Permission, User, UserRole, UserStatus,
     MembershipCategory, ActivityActionType, ActivityLog, UserSession,
@@ -181,6 +182,7 @@ def _is_online(user: User) -> bool:
     print(f"result of online check: {result}")
     print(f"User {user.first_name} is {'online' if result else 'offline'}")
     return result
+
 
 
 
@@ -529,6 +531,7 @@ async def update_user(
 @router.patch("/users/{user_id}/validate", tags=["Members"])
 async def validate_payment(
     user_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(role_required(UserRole.ADMIN)),
 ):
     """Toggle payment validation (admin only). Upgrades role to membre on confirmation."""
@@ -548,6 +551,18 @@ async def validate_payment(
 
     await user.save()
     await user.fetch_related("membership_category")
+
+    try:
+        await send_email(
+            subject=f"Payment {'validated' if user.is_payment_validated else 'revoked'}",
+            to=user.email, html_message=f"""
+                <html><body>
+                    <p>Hello {user.first_name},</p>
+                    <p>Your payment has been {'validated' if user.is_payment_validated else 'revoked'}.</p>
+                </body></html>
+            """)
+    except Exception as e:
+        print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
     await log_activity(
         current_user, ActivityActionType.USER_VALIDATED, "user", user.id,
         f"Payment {'validated' if user.is_payment_validated else 'revoked'} for {user.full_name}",
