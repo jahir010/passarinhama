@@ -38,6 +38,7 @@ class Training(models.Model):
     training_date   = fields.DateField(null=True)
     duration_hours  = fields.IntField(null=True)
     max_attendees   = fields.IntField(null=True)
+    attachments     = fields.JSONField(null=True)  # List of file URLs or metadata
     status          = fields.CharEnumField(TrainingStatus, default=TrainingStatus.OPEN)
     created_by      = fields.ForeignKeyField("models.User", related_name="trainings", on_delete=fields.RESTRICT)
     created_at      = fields.DatetimeField(auto_now_add=True)

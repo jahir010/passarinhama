@@ -282,7 +282,7 @@ async def create_event(
     # NotificationPreference stores per-user per-type opt-in/out
     prefs = await NotificationPreference.filter(
         notification_type=NotificationType.NEW_EVENT,
-        is_enabled=True,
+        email_enabled=True,
     ).prefetch_related("user")
 
     for pref in prefs:
