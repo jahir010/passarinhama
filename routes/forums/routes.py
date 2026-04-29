@@ -121,9 +121,13 @@ async def create_forum(
         count = await Forum.filter(slug__startswith=slug).count()
         slug = f"{slug}-{count}"
 
-    return await Forum.create(
+    forum = await Forum.create(
         name=name, slug=slug, description=description, forum_type=forum_type
     )
+
+    perm = await ForumRolePermission.create(forum=forum, role=UserRole.ADMIN, can_read=True, can_post=True)
+
+    return forum
 
 
 @router.get("/forums/{forum_id}", tags=["Forums"])
