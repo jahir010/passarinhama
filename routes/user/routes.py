@@ -185,20 +185,20 @@ def _is_online(user: User) -> bool:
 
 
 
+async def _notify_user_payment_validated(user: User):
+    try:
+        await send_email(
+            subject=f"Membership {'validated' if user.is_payment_validated else 'revoked'}",
+            to=user.email, html_message=f"""
+                <html><body>
+                    <p>Hello {user.first_name},</p>
+                    <p>Your membership has been {'validated' if user.is_payment_validated else 'revoked'}.</p>
+                </body></html>
+            """)
+    except Exception as e:
+        print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
 
 
-# def _is_online(user: User) -> bool:
-#     if not user.last_seen_at:
-#         return False
-
-#     last_seen = user.last_seen_at
-#     if last_seen.tzinfo is None:
-#         last_seen = last_seen.replace(tzinfo=timezone.utc)  # ← timezone.utc
-#     last_seen_utc = last_seen.astimezone(timezone.utc)       # ← timezone.utc
-
-#     threshold = datetime.now(timezone.utc) - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
-
-#     return last_seen_utc >= threshold
 
 
 def _membership_year(user: User) -> int | None:
@@ -552,17 +552,8 @@ async def validate_payment(
     await user.save()
     await user.fetch_related("membership_category")
 
-    try:
-        await send_email(
-            subject=f"Payment {'validated' if user.is_payment_validated else 'revoked'}",
-            to=user.email, html_message=f"""
-                <html><body>
-                    <p>Hello {user.first_name},</p>
-                    <p>Your payment has been {'validated' if user.is_payment_validated else 'revoked'}.</p>
-                </body></html>
-            """)
-    except Exception as e:
-        print(f"[notify] Failed to enqueue notification task: {e}", flush=True)
+    background_tasks.add_task(_notify_user_payment_validated, user)
+    
     await log_activity(
         current_user, ActivityActionType.USER_VALIDATED, "user", user.id,
         f"Payment {'validated' if user.is_payment_validated else 'revoked'} for {user.full_name}",
