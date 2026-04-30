@@ -239,6 +239,54 @@ async def get_forum(
     return forum
 
 
+@router.patch("/forums/{forum_id}", tags=["Forums"])
+async def update_forum(
+    forum_id: uuid.UUID,
+    name: str | None = None,
+    description: str | None = None,
+    forum_type: str | None = None,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    """
+    Update a forum's details (admin only).
+    Spec ref: §7.1, §15.5
+    """
+    forum = await Forum.get_or_none(id=forum_id)
+    if not forum:
+        raise HTTPException(status_code=404, detail="Forum not found.")
+    if name:
+        forum.name = name
+        # Update slug if name changes, using the same logic as creation
+        slug = _slugify(name)
+        if await Forum.filter(slug=slug).exclude(id=forum_id).exists():
+            count = await Forum.filter(slug__startswith=slug).exclude(id=forum_id).count()
+            slug = f"{slug}-{count}"
+        forum.slug = slug
+    if description is not None:
+        forum.description = description
+    if forum_type is not None:
+        forum.forum_type = forum_type
+    await forum.save()
+    await log_activity(current_user, ActivityActionType.FORUM_UPDATED, "forum", forum.id)
+    return forum
+
+@router.delete("/forums/{forum_id}", tags=["Forums"], status_code=204)
+async def delete_forum(
+    forum_id: uuid.UUID,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    """
+    Delete a forum and all its topics/posts (admin only).
+    Spec ref: §7.1, §15.5
+    """
+    forum = await Forum.get_or_none(id=forum_id)
+    if not forum:
+        raise HTTPException(status_code=404, detail="Forum not found.")
+    await log_activity(current_user, ActivityActionType.FORUM_DELETED, "forum", forum.id)
+    await forum.delete()
+    return {"status": "Forum deleted successfully."}
+
+
 @router.patch("/forums/{forum_id}/permissions", tags=["Forums"])
 async def set_forum_permission(
     forum_id: uuid.UUID,
@@ -451,6 +499,46 @@ async def lock_topic(
     return {"id": str(topic.id), "is_locked": topic.is_locked}
 
 
+@router.patch("/topics/{topic_id}/update", tags=["Forums"])
+async def update_topic(
+    topic_id: uuid.UUID,
+    title: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Update a topic's title (author only).
+    Spec ref: §7.2
+    """
+    topic = await Topic.get_or_none(id=topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found.")
+    if topic.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
+        raise HTTPException(status_code=403, detail="Only the topic author or moderators can update the topic.")
+    if title is not None:
+        topic.title = title
+    await topic.save()
+    await log_activity(current_user, ActivityActionType.TOPIC_UPDATED, "topic", topic.id)
+    return topic
+
+@router.delete("/topics/{topic_id}/delete", tags=["Forums"], status_code=204)
+async def delete_topic(
+    topic_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Delete a topic and all its posts (author or moderator).
+    Spec ref: §7.2
+    """
+    topic = await Topic.get_or_none(id=topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found.")
+    if topic.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
+        raise HTTPException(status_code=403, detail="Only the topic author or moderators can delete the topic.")
+    await log_activity(current_user, ActivityActionType.TOPIC_DELETED, "topic", topic.id)
+    await topic.delete()
+    return {"status": "Topic deleted successfully."}
+
+
 @router.post("/forums/{forum_id}/topics", tags=["Forums"], status_code=201)
 async def create_topic(
     forum_id: uuid.UUID,
@@ -539,6 +627,62 @@ async def list_posts(
     ]
 
     return {"total": total, "page": page, "results": results}
+
+
+
+@router.patch("/posts/{post_id}", tags=["Forums"])
+async def update_post(
+    post_id: uuid.UUID,
+    content: str = Form(None),
+    files:   list[UploadFile] = File(None),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Update a post's content and attachments (author only).
+    Spec ref: §7.3
+    """
+    post = await Post.get_or_none(id=post_id).prefetch_related("author", "topic")
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    if post.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
+        raise HTTPException(status_code=403, detail="Only the post author or moderators can update the post.")
+
+    if content is not None:
+        post.content = content
+
+    if files is not None:
+        if post.attachment:
+            for file_url in post.attachment:
+                await delete_file(file_url)
+        attachments = []
+        for f in files:
+            file_url = await save_file(file=f, upload_to="post_attachments")
+            attachments.append(file_url)
+        post.attachment = attachments
+
+    await post.save()
+    await log_activity(current_user, ActivityActionType.POST_UPDATED, "post", post.id)
+    return post
+
+
+
+@router.delete("/posts/{post_id}", tags=["Forums"], status_code=204)
+async def delete_post(
+    post_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Delete a post (author or moderator).
+    Spec ref: §7.3
+    """
+    post = await Post.get_or_none(id=post_id).prefetch_related("author", "topic")
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    if post.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
+        raise HTTPException(status_code=403, detail="Only the post author or moderators can delete the post.")
+    await log_activity(current_user, ActivityActionType.POST_DELETED, "post", post.id)
+    await post.delete()
+    return {"status": "Post deleted successfully."}
 
 
 @router.post("/topics/{topic_id}/posts", tags=["Forums"], status_code=201)
