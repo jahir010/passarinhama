@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone as UTC, timedelta
 
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, File
 from tortoise.expressions import Q
 from pydantic import BaseModel, EmailStr, Field, computed_field
 
@@ -15,6 +15,7 @@ from applications.user.models import (
     Group, Permission, User, UserRole, UserStatus,
     MembershipCategory, ActivityActionType, ActivityLog, UserSession,
 )
+from app.utils.file_manager import update_file
 
 router = APIRouter()
 
@@ -519,6 +520,32 @@ async def update_user(
 
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(user, field, value)
+    await user.save()
+    await user.fetch_related("membership_category")
+    return _serialize_profile(user)
+
+
+@router.patch("/users/{user_id}/photo_upload", tags=["Members"])
+async def update_user_photo(
+    user_id: uuid.UUID,
+    photo: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Update a user's profile photo."""
+    if current_user.id != user_id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorised to update this user's photo.")
+    user = await User.get_or_none(id=user_id, is_deleted=False)
+    if not user:
+        raise HTTPException(status_code=404, detail="Member not found.")
+
+    if photo.filename:
+        try:
+            new_url = await update_file(photo, user.avatar_url, upload_to="avatars")
+            user.avatar_url = new_url
+        except Exception as e:
+            print(f"Failed to upload photo for user {user.id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to upload photo.")
+
     await user.save()
     await user.fetch_related("membership_category")
     return _serialize_profile(user)
