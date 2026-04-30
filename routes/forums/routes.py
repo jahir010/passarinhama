@@ -137,6 +137,17 @@ async def _notify_new_post(post_id: uuid.UUID, post_title: str) -> None:
     )
 
 
+async def _notify_post_rejection(email: str) -> None:
+    try:
+        await send_email(subject="Your post was rejected", to=email, html_message=f"""
+            <html><body>
+                <p>Your post has been rejected.</p>
+            </body></html>
+        """)
+    except Exception as e:
+        print(f"[notify] Failed to send rejection email: {e}", flush=True)
+
+
 
 
 
@@ -713,14 +724,8 @@ async def moderate_post(
         # await send_email(
         #     author, NotificationType.POST_REJECTED, "post", post.id, background_tasks
         # )
-        try:
-            await send_email(subject="Your post was rejected", to=author.email, html_message=f"""
-                <html><body>
-                    <p>Your post has been rejected.</p>
-                </body></html>
-            """)
-        except Exception as e:
-            print(f"[notify] Failed to send rejection email: {e}", flush=True)
+        print(f"[moderation] Enqueuing rejection email to {author.email} for post {post.id}", flush=True)
+        background_tasks.add_task(_notify_post_rejection, author.email)
         log_action_type = ActivityActionType.POST_REJECTED
 
     elif body.action == ModerationAction.FLAG:
