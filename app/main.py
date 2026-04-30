@@ -65,7 +65,7 @@ async def home(request: Request):
     )
 
 
-ALLOWED_HOST = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "https://ocreels.netlify.app"]
+ALLOWED_HOST = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "https://ocreels.netlify.app", "https://archicopro.netlify.app/"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_HOST,
