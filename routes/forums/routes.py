@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, BackgroundTasks
 from tortoise.transactions import in_transaction
 from tortoise.expressions import Q, F
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uuid
 import re
 from datetime import datetime, timezone as UTC
@@ -914,5 +914,156 @@ async def moderate_post(
         "action":  body.action,
     }
 
+
+
+
+
+
+
+
+
+
+
+# # ─── Pydantic schema ───────────────────────────────────────────────────────────
+
+# class ForumPermissionEntry(BaseModel):
+#     forum_id: uuid.UUID
+#     role:     UserRole
+#     can_read: bool
+#     can_post: bool
+
+
+# class BulkForumPermissionRequest(BaseModel):
+#     permissions: list[ForumPermissionEntry]
+
+#     @field_validator("permissions")
+#     @classmethod
+#     def no_duplicates(cls, entries: list[ForumPermissionEntry]):
+#         seen = set()
+#         for e in entries:
+#             key = (e.forum_id, e.role)
+#             if key in seen:
+#                 raise ValueError(f"Duplicate entry for forum {e.forum_id} / role {e.role}")
+#             seen.add(key)
+#         return entries
+
+
+# # ─── Endpoint ──────────────────────────────────────────────────────────────────
+
+# @router.patch("/forums/permissions/bulk", tags=["Forums"])
+# async def set_forum_permissions_bulk(
+#     body:         BulkForumPermissionRequest,
+#     current_user: User = Depends(role_required(UserRole.ADMIN)),
+# ):
+#     """
+#     Bulk-upsert read/post permissions for multiple (forum, role) pairs.
+#     - Validates all forum IDs exist before touching the DB.
+#     - Uses a single bulk_create with update_fields to do one INSERT … ON CONFLICT.
+#     Spec ref: §15.5
+#     """
+#     if not body.permissions:
+#         return {"updated": 0, "permissions": []}
+
+#     # 1. Resolve & validate all forum IDs in ONE query
+#     requested_ids = {e.forum_id for e in body.permissions}
+#     found_forums  = await Forum.filter(id__in=requested_ids, is_active=True).only("id")
+#     found_ids     = {f.id for f in found_forums}
+
+#     missing = requested_ids - found_ids
+#     if missing:
+#         raise HTTPException(
+#             status_code=404,
+#             detail=f"Forums not found or inactive: {[str(m) for m in missing]}",
+#         )
+
+#     # 2. Build ORM objects for bulk upsert
+#     records = [
+#         ForumRolePermission(
+#             forum_id = e.forum_id,
+#             role     = e.role,
+#             can_read = e.can_read,
+#             can_post = e.can_post,
+#         )
+#         for e in body.permissions
+#     ]
+
+#     # 3. Single upsert — one round-trip to the DB
+#     #    on_conflict targets the unique_together index (forum_id, role)
+#     await ForumRolePermission.bulk_create(
+#         records,
+#         update_fields=["can_read", "can_post"],   # only overwrite these columns
+#         on_conflict=["forum_id", "role"],          # tortoise-orm ≥ 0.20
+#     )
+
+#     # 4. Return the current state of every touched row
+#     result = await ForumRolePermission.filter(
+#         forum_id__in=list(requested_ids)
+#     ).values("id", "forum_id", "role", "can_read", "can_post")
+
+#     return {"updated": len(records), "permissions": result}
+
+
+
+
+
+# ─── Pydantic schema ───────────────────────────────────────────────────────────
+
+class BulkForumPermissionRequest(BaseModel):
+    forum_id: list[uuid.UUID]
+    role:     list[UserRole]
+    can_read: bool
+    can_post: bool
+
+    @field_validator("forum_id", "role")
+    @classmethod
+    def no_empty(cls, v):
+        if not v:
+            raise ValueError("List cannot be empty.")
+        return v
+
+
+# ─── Endpoint ──────────────────────────────────────────────────────────────────
+
+@router.patch("/forums/permissions/bulk", tags=["Forums"])
+async def set_forum_permissions_bulk(
+    body:         BulkForumPermissionRequest,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    # 1. Validate all forum IDs exist in ONE query
+    found_forums = await Forum.filter(id__in=body.forum_id, is_active=True).only("id")
+    found_ids    = {f.id for f in found_forums}
+
+    missing = set(body.forum_id) - found_ids
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Forums not found or inactive: {[str(m) for m in missing]}",
+        )
+
+    # 2. Expand (forum_id x role) combinations
+    records = [
+        ForumRolePermission(
+            forum_id = forum_id,
+            role     = role,
+            can_read = body.can_read,
+            can_post = body.can_post,
+        )
+        for forum_id in body.forum_id
+        for role in body.role
+    ]
+
+    # 3. Single upsert — one round-trip
+    await ForumRolePermission.bulk_create(
+        records,
+        update_fields=["can_read", "can_post"],
+        on_conflict=["forum_id", "role"],
+    )
+
+    # 4. Return updated rows
+    result = await ForumRolePermission.filter(
+        forum_id__in=body.forum_id
+    ).values("id", "forum_id", "role", "can_read", "can_post")
+
+    return {"updated": len(records), "permissions": result}
 
 

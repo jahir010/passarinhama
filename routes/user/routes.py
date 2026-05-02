@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone as UTC, timedelta
 
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from tortoise.expressions import Q
 from pydantic import BaseModel, EmailStr, Field, computed_field
 
@@ -15,7 +15,8 @@ from applications.user.models import (
     Group, Permission, User, UserRole, UserStatus,
     MembershipCategory, ActivityActionType, ActivityLog, UserSession,
 )
-from app.utils.file_manager import update_file
+from app.utils.file_manager import update_file, save_file, delete_file
+
 
 router = APIRouter()
 
@@ -235,6 +236,10 @@ def _serialize_user(user: User) -> dict:
         "avatar_url":           user.avatar_url,
         "phone":                user.phone,
         "mobile":               user.mobile,
+        "address":              user.street_address,
+        "city":                 user.city,
+        "society":              user.company_name,
+        "department":           user.company_role,
         "role":                 user.role,
         "status":               user.status,
         "is_payment_validated": user.is_payment_validated,
@@ -366,22 +371,47 @@ async def list_users(
 
 @router.post("/users", tags=["Members"], status_code=201)
 async def create_user(
-    body: UserCreate,
+    first_name: str = Form(...),
+    last_name:  str = Form(...),
+    email:      EmailStr = Form(...),
+    password:   str = Form(...),
+    phone:      str | None = Form(None),
+    mobile:     str | None = Form(None),
+    avatar:     UploadFile | None = File(None),
+    address:    str | None = Form(None),
+    city:      str | None = Form(None),
+    department: str | None = Form(None),
+    society:    str | None = Form(None),
+    role:      UserRole = Form(UserRole.AUDITEUR),
+    status:    UserStatus = Form(UserStatus.PENDING),
+    payment_validated: bool = Form(False),
     current_user: User = Depends(role_required(UserRole.ADMIN)),
 ):
     """Create a new member account (admin only)."""
-    if await User.filter(email=body.email).exists():
+    if await User.filter(email=email).exists():
         raise HTTPException(status_code=409, detail="Email already registered.")
+    
+    if avatar and avatar.filename:
+        try:
+            avatar_url = await save_file(avatar, upload_to="avatars")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to upload avatar.")
 
     user = await User.create(
-        email=body.email,
-        password=User.set_password(body.password),
-        first_name=body.first_name,
-        last_name=body.last_name,
-        phone=body.phone,
-        mobile=body.mobile,
-        role=body.role,
-        membership_category_id=body.membership_category_id,
+        email=email,
+        password=User.set_password(password),
+        first_name=first_name,
+        last_name=last_name,
+        avatar_url=avatar_url if avatar and avatar.filename else None,
+        street_address=address,
+        city=city,
+        company_name=society,
+        company_role=department,
+        phone=phone,
+        mobile=mobile,
+        role=role,
+        status=status,
+        is_payment_validated=payment_validated,
         member_since=datetime.now(UTC.utc),
     )
     await log_activity(current_user, ActivityActionType.USER_REGISTERED, "user", user.id,
@@ -438,12 +468,42 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.patch("/users/me", tags=["Members"])
 async def update_me(
-    body: UserUpdate,
+    first_name: str = Form(None),
+    last_name:  str = Form(None),
+    phone:      str | None = Form(None),
+    mobile:     str | None = Form(None),
+    avatar:     UploadFile | None = File(None),
+    address:    str | None = Form(None),
+    city:      str | None = Form(None),
+    department: str | None = Form(None),
+    society:    str | None = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """Update own profile (§16.1 + Société tab)."""
-    for field, value in body.model_dump(exclude_none=True).items():
-        setattr(current_user, field, value)
+    if avatar and avatar.filename:
+        try:
+            avatar_url = await update_file(avatar, current_user.avatar_url, upload_to="avatars")
+            current_user.avatar_url = avatar_url
+        except Exception as e:
+            print(f"Failed to upload photo for user {current_user.id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to upload photo.")
+    if first_name is not None:
+        current_user.first_name = first_name
+    if last_name is not None:
+        current_user.last_name = last_name
+    if phone is not None:
+        current_user.phone = phone
+    if mobile is not None:
+        current_user.mobile = mobile
+    if address is not None:
+        current_user.street_address = address
+    if city is not None:
+        current_user.city = city
+    if department is not None:
+        current_user.company_role = department
+    if society is not None:
+        current_user.company_name = society
+    
     await current_user.save()
     await current_user.fetch_related("membership_category")
     await log_activity(current_user, ActivityActionType.PROFILE_UPDATED, "user", current_user.id)
