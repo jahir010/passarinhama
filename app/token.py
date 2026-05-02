@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status, Request, Header, Response
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError, ExpiredSignatureError
+from redis.exceptions import RedisError
 from datetime import datetime, timedelta, timezone
 from tortoise.exceptions import DoesNotExist
 from app.config import settings
@@ -40,8 +41,8 @@ REFRESH_SECRET_KEY  = getattr(settings, "REFRESH_SECRET_KEY", None) or f"{SECRET
 ALGORITHM           = getattr(settings, "JWT_ALGORITHM", "HS256")
 
 # §4.2: access token 30 min, refresh token 30 days
-ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int_setting("ACCESS_TOKEN_EXPIRE_MINUTES", 30*24*60)
-REFRESH_TOKEN_EXPIRE_DAYS   = _safe_int_setting("REFRESH_TOKEN_EXPIRE_DAYS", 60*24*60)
+ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int_setting("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
+REFRESH_TOKEN_EXPIRE_DAYS   = _safe_int_setting("REFRESH_TOKEN_EXPIRE_DAYS", 30)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login_auth2/", auto_error=False)
 
@@ -72,12 +73,24 @@ def _blocklist_key(jti: str) -> str:
 async def blocklist_refresh_token(jti: str, ttl_seconds: int) -> None:
     """Add a refresh token JTI to the Redis blocklist until it naturally expires."""
     redis = _get_redis()
-    await redis.set(_blocklist_key(jti), "1", ex=ttl_seconds)
+    try:
+        await redis.set(_blocklist_key(jti), "1", ex=ttl_seconds)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth service is temporarily unavailable.",
+        )
 
 
 async def is_refresh_token_blocked(jti: str) -> bool:
     redis = _get_redis()
-    return bool(await redis.get(_blocklist_key(jti)))
+    try:
+        return bool(await redis.get(_blocklist_key(jti)))
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth service is temporarily unavailable.",
+        )
 
 
 # =========================
@@ -223,6 +236,9 @@ async def get_current_user(
 
                 new_access_token  = create_access_token(token_data)
                 new_refresh_token = create_refresh_token(token_data)
+                if jti:
+                    ttl_seconds = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+                    await blocklist_refresh_token(jti, ttl_seconds)
 
                 request.state.new_tokens = {
                     "access_token":  new_access_token,

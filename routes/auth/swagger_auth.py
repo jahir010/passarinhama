@@ -1,8 +1,8 @@
-from tortoise.contrib.pydantic import pydantic_model_creator
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request, Response
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import datetime, timezone
 import re
 
 from app.config import settings
@@ -67,32 +67,26 @@ def _check_user_status(user: User) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OAuth2 form helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-class OAuth2EmailPasswordForm:
-    def __init__(
-        self,
-        email:         EmailStr = Form(...),
-        password:      str      = Form(...),
-        scope:         str      = Form(""),
-        client_id:     str      = Form(None),
-        client_secret: str      = Form(None),
-    ):
-        self.email         = email
-        self.password      = password
-        self.scopes        = scope.split()
-        self.client_id     = client_id
-        self.client_secret = client_secret
-
-
-User_Pydantic = pydantic_model_creator(User, name="User")
-
-
 class TokenResponse(BaseModel):
     access_token:  str
     refresh_token: str
     token_type:    str
+
+
+async def _issue_auth_tokens(user: User, response: Response) -> dict:
+    token_data = _build_token_data(user)
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
+
+    set_auth_cookies(response, access_token, refresh_token)
+    now = datetime.now(timezone.utc)
+    await User.filter(id=user.id).update(last_login_at=now, last_seen_at=now)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,17 +111,7 @@ async def login_auth2(
 
     _check_user_status(user)
 
-    token_data    = _build_token_data(user)
-    access_token  = create_access_token(token_data)
-    refresh_token = create_refresh_token(token_data)
-
-    set_auth_cookies(response, access_token, refresh_token)
-
-    return {
-        "access_token":  access_token,
-        "refresh_token": refresh_token,
-        "token_type":    "bearer",
-    }
+    return await _issue_auth_tokens(user, response)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

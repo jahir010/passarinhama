@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Optional
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
@@ -81,12 +82,33 @@ class TokenResponse(BaseModel):
     token_type:    str
 
 
+async def _issue_auth_tokens(user: User, response: Response | None = None) -> dict:
+    token_data = _build_token_data(user)
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
+
+    if response is not None:
+        set_auth_cookies(response, access_token, refresh_token)
+
+    now = datetime.now(timezone.utc)
+    await User.filter(id=user.id).update(last_login_at=now, last_seen_at=now)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGIN (OAuth2 / Swagger)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/login_auth2", response_model=TokenResponse)
-async def login_auth2(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login_auth2(
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+):
     email = _normalize_email(form_data.username)
     await detect_input_type(email)
 
@@ -99,12 +121,7 @@ async def login_auth2(form_data: OAuth2PasswordRequestForm = Depends()):
 
     _check_user_status(user)
 
-    token_data = _build_token_data(user)
-    return {
-        "access_token":  create_access_token(token_data),
-        "refresh_token": create_refresh_token(token_data),
-        "token_type":    "bearer",
-    }
+    return await _issue_auth_tokens(user, response)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,6 +130,7 @@ async def login_auth2(form_data: OAuth2PasswordRequestForm = Depends()):
 
 @router.post("/login")
 async def login(
+    response:  Response,
     email:     str           = Form(...),
     password:  str           = Form(...),
     otp_value: Optional[str] = Form(None),
@@ -141,13 +159,9 @@ async def login(
             }
         await verify_otp(email, normalized_otp, "login")
 
-    token_data = _build_token_data(user)
-    return {
-        "access_token":  create_access_token(token_data),
-        "refresh_token": create_refresh_token(token_data),
-        "token_type":    "bearer",
-        "role":          user.role,
-    }
+    token_response = await _issue_auth_tokens(user, response)
+    token_response["role"] = user.role
+    return token_response
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,6 +293,7 @@ async def send_otp(
 
 @router.post("/signup")
 async def signup(
+    response:   Response,
     first_name: str      = Form(...),
     last_name:  str      = Form(...),
     email:      str      = Form(...),
@@ -317,12 +332,10 @@ async def signup(
         is_active=True,
     )
 
-    token_data = _build_token_data(user)
+    token_response = await _issue_auth_tokens(user, response)
     return {
         "message":       "User created successfully. Awaiting payment validation.",
-        "access_token":  create_access_token(token_data),
-        "refresh_token": create_refresh_token(token_data),
-        "token_type":    "bearer",
+        **token_response,
         "role":          user.role,
         "status":        user.status,
     }

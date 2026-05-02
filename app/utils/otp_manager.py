@@ -4,6 +4,7 @@ from hmac import compare_digest
 
 from fastapi import HTTPException, status
 from fastapi.templating import Jinja2Templates
+from redis.exceptions import RedisError
 
 from app.config import settings
 from app.redis import get_redis
@@ -108,6 +109,13 @@ def _get_redis_client():
         )
 
 
+def _raise_otp_service_unavailable() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="OTP service is unavailable.",
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -125,7 +133,10 @@ async def generate_otp(user_key: str, purpose: str) -> str:
     attempts_key = _otp_attempts_key(normalized_user_key, normalized_purpose)
     session_key  = _session_key(normalized_user_key, normalized_purpose)
 
-    attempts_raw = await redis.get(attempts_key)
+    try:
+        attempts_raw = await redis.get(attempts_key)
+    except RedisError:
+        _raise_otp_service_unavailable()
     attempts     = int(attempts_raw) if attempts_raw else 0
     if attempts >= MAX_ATTEMPTS_PER_HOUR:
         raise HTTPException(
@@ -169,13 +180,16 @@ async def generate_otp(user_key: str, purpose: str) -> str:
                 detail="Failed to send OTP.",
             )
 
-    await redis.set(otp_key, otp, ex=OTP_EXPIRY_SECONDS)
-    # Invalidate any existing session key so the old one cannot be reused
-    await redis.delete(session_key)
+    try:
+        await redis.set(otp_key, otp, ex=OTP_EXPIRY_SECONDS)
+        # Invalidate any existing session key so the old one cannot be reused
+        await redis.delete(session_key)
 
-    count = await redis.incr(attempts_key)
-    if count == 1:
-        await redis.expire(attempts_key, 3600)
+        count = await redis.incr(attempts_key)
+        if count == 1:
+            await redis.expire(attempts_key, 3600)
+    except RedisError:
+        _raise_otp_service_unavailable()
 
     return otp
 
@@ -194,7 +208,10 @@ async def verify_otp(user_key: str, otp_value: str, purpose: str) -> str:
     otp_key          = _otp_key(normalized_user_key, normalized_purpose)
     session_key_name = _session_key(normalized_user_key, normalized_purpose)
 
-    stored_otp = await redis.get(otp_key)
+    try:
+        stored_otp = await redis.get(otp_key)
+    except RedisError:
+        _raise_otp_service_unavailable()
     if not stored_otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -207,10 +224,12 @@ async def verify_otp(user_key: str, otp_value: str, purpose: str) -> str:
             detail="Invalid OTP.",
         )
 
-    await redis.delete(otp_key)
-
     session_key = secrets.token_urlsafe(32)
-    await redis.set(session_key_name, session_key, ex=SESSION_KEY_EXPIRY_SECONDS)
+    try:
+        await redis.delete(otp_key)
+        await redis.set(session_key_name, session_key, ex=SESSION_KEY_EXPIRY_SECONDS)
+    except RedisError:
+        _raise_otp_service_unavailable()
     return session_key
 
 
@@ -225,7 +244,10 @@ async def verify_session_key(user_key: str, session_key: str, purpose: str) -> b
     redis                  = _get_redis_client()
 
     redis_session_key   = _session_key(normalized_user_key, normalized_purpose)
-    stored_session_key  = await redis.get(redis_session_key)
+    try:
+        stored_session_key  = await redis.get(redis_session_key)
+    except RedisError:
+        _raise_otp_service_unavailable()
 
     if not stored_session_key:
         raise HTTPException(
@@ -239,5 +261,8 @@ async def verify_session_key(user_key: str, session_key: str, purpose: str) -> b
             detail="Invalid session key.",
         )
 
-    await redis.delete(redis_session_key)
+    try:
+        await redis.delete(redis_session_key)
+    except RedisError:
+        _raise_otp_service_unavailable()
     return True
