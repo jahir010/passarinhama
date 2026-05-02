@@ -58,6 +58,8 @@ TORTOISE_ORM = {
 }
 
 async def init_db():
+    if getattr(Tortoise, "_inited", False):
+        return
     await Tortoise.init(config=TORTOISE_ORM)
     if settings.ENV != "production":
         await Tortoise.generate_schemas()
@@ -66,4 +68,6 @@ async def init_db():
 
 
 async def close_db():
+    if not getattr(Tortoise, "_inited", False):
+        return
     await Tortoise.close_connections()
