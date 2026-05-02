@@ -87,8 +87,8 @@ async def _issue_auth_tokens(user: User, response: Response | None = None) -> di
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
 
-    if response is not None:
-        set_auth_cookies(response, access_token, refresh_token)
+    # if response is not None:
+    #     set_auth_cookies(response, access_token, refresh_token)
 
     now = datetime.now(timezone.utc)
     await User.filter(id=user.id).update(last_login_at=now, last_seen_at=now)
