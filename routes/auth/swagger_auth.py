@@ -1,3 +1,4 @@
+from tortoise.contrib.pydantic import pydantic_model_creator
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request, Response
 from pydantic import BaseModel, EmailStr
