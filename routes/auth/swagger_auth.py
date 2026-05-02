@@ -6,7 +6,6 @@ import re
 
 from app.config import settings
 from applications.user.models import User, UserStatus
-from applications.user.schema import ensure_user_not_banned
 from app.token import (
     get_current_user,
     create_access_token,
@@ -20,7 +19,6 @@ from app.token import (
     ALGORITHM,
     _normalize_token,
 )
-from tortoise.contrib.pydantic import pydantic_model_creator
 
 router = APIRouter(tags=["Swagger Authentication"])
 
@@ -117,7 +115,6 @@ async def login_auth2(
         )
 
     _check_user_status(user)
-    await ensure_user_not_banned(user)
 
     token_data    = _build_token_data(user)
     access_token  = create_access_token(token_data)
