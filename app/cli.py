@@ -8,7 +8,16 @@ from tortoise import Tortoise
 from app.config import init_db
 from applications.user.models import User, UserRole, UserStatus
 
-cli = typer.Typer(help="Project management commands.")
+cli = typer.Typer(
+    help="Project management commands.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+
+@cli.callback()
+def main() -> None:
+    """Management command entrypoint."""
 
 
 async def _close_db() -> None:
@@ -55,6 +64,7 @@ async def _create_superuser(
 
 
 @cli.command("create-superuser")
+@cli.command("createsuperuser")
 def create_superuser(
     email: Optional[str] = typer.Option(None, prompt=True, help="Email address"),
     first_name: Optional[str] = typer.Option(None, prompt=True, help="First name"),

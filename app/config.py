@@ -56,8 +56,6 @@ TORTOISE_ORM = {
     "use_tz": True,
     "timezone": "UTC",
 }
-import json
-print(json.dumps(TORTOISE_ORM, indent=4))
 
 async def init_db():
     await Tortoise.init(config=TORTOISE_ORM)
