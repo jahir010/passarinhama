@@ -225,9 +225,9 @@ async def create_folder(
     folder = await DocumentFolder.create(**body.model_dump())
 
     # Seed default R+W permissions for admin and moderator
-    for role in (UserRole.ADMIN):
+    if current_user.role == UserRole.ADMIN:
         await DocumentFolderPermission.get_or_create(
-            folder=folder, role=role,
+            folder=folder, role=UserRole.ADMIN,
             defaults={"can_read": True, "can_upload": True},
         )
 

@@ -32,6 +32,7 @@ class Forum(models.Model):
     id          = fields.UUIDField(pk=True, default=uuid.uuid4)
     name        = fields.CharField(max_length=200, unique=True)
     slug        = fields.CharField(max_length=200, unique=True)
+    author_name = fields.CharField(max_length=100)  # denormalised for display
     description = fields.TextField(null=True)
     forum_type  = fields.CharField(max_length=50, default="general")
     is_active   = fields.BooleanField(default=True)
@@ -75,6 +76,8 @@ class Topic(models.Model):
     forum            = fields.ForeignKeyField("models.Forum", related_name="topics", on_delete=fields.CASCADE)
     author           = fields.ForeignKeyField("models.User", related_name="topics", on_delete=fields.RESTRICT)
     title            = fields.CharField(max_length=500)
+    content          = fields.TextField(null=True)
+    attachment       = fields.JSONField(null=True)  # e.g. {"url": "...", "type": "image/png"}
     is_pinned        = fields.BooleanField(default=False)
     is_locked        = fields.BooleanField(default=False)
     view_count       = fields.IntField(default=0)           # denormalised — updated async

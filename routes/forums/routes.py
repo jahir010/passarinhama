@@ -182,6 +182,7 @@ async def list_forums(current_user: User = Depends(get_current_user)):
             "id":               str(forum.id),
             "name":             forum.name,
             "slug":             forum.slug,
+            "author_name":      forum.author_name,
             "description":      forum.description,
             "forum_type":       forum.forum_type,
             "topic_count":      topic_count,
@@ -195,6 +196,7 @@ async def list_forums(current_user: User = Depends(get_current_user)):
 @router.post("/forums", tags=["Forums"], status_code=201)
 async def create_forum(
     name:        str,
+    author_name: str | None = None,
     description: str | None = None,
     forum_type:  str = "general",
     current_user: User = Depends(role_required(UserRole.ADMIN)),
@@ -214,7 +216,7 @@ async def create_forum(
         slug = f"{slug}-{count}"
 
     forum = await Forum.create(
-        name=name, slug=slug, description=description, forum_type=forum_type
+        name=name, slug=slug, description=description, forum_type=forum_type, author_name=author_name
     )
 
     perm = await ForumRolePermission.create(forum=forum, role=UserRole.ADMIN, can_read=True, can_post=True)
@@ -243,6 +245,7 @@ async def get_forum(
 async def update_forum(
     forum_id: uuid.UUID,
     name: str | None = None,
+    author_name: str | None = None,
     description: str | None = None,
     forum_type: str | None = None,
     current_user: User = Depends(role_required(UserRole.ADMIN)),
@@ -266,6 +269,8 @@ async def update_forum(
         forum.description = description
     if forum_type is not None:
         forum.forum_type = forum_type
+    if author_name is not None:
+        forum.author_name = author_name
     await forum.save()
     await log_activity(current_user, ActivityActionType.FORUM_UPDATED, "forum", forum.id)
     return forum
@@ -395,6 +400,8 @@ async def list_topics(
         results.append({
             "id":               str(t.id),
             "title":            t.title,
+            "content":          t.content,
+            "attachment":       t.attachment,
             "is_pinned":        t.is_pinned,
             "is_locked":        t.is_locked,
             "view_count":       t.view_count,
@@ -410,6 +417,52 @@ async def list_topics(
         })
 
     return {"total": total, "page": page, "results": results}
+
+
+
+
+@router.get("/topics/pinned", tags=["Forums"])
+async def pinned_topic_list(
+    current_user: User = Depends(get_current_user)
+):
+    topics = await Topic.filter(is_pinned=True).prefetch_related("forum", "author")
+
+    result = []
+    for topic in topics:
+        forum = topic.forum  # ✅ No `await` — already prefetched
+
+        perm = await ForumRolePermission.get_or_none(
+            forum=forum,
+            role=current_user.role,
+            can_read=True,  # ✅ Only include topics the user can actually read
+        )
+        if not perm:
+            continue
+
+        result.append({
+            "id":               str(topic.id),
+            "title":            topic.title,
+            "content":          topic.content,
+            "attachment":       topic.attachment,
+            "is_pinned":        topic.is_pinned,
+            "is_locked":        topic.is_locked,
+            "view_count":       topic.view_count,
+            "reply_count":      topic.reply_count,
+            "last_activity_at": topic.last_activity_at,
+            "created_at":       topic.created_at,
+            "author": {
+                "id":         str(topic.author_id),
+                "first_name": topic.author.first_name,  # ✅ Direct access, already prefetched
+                "last_name":  topic.author.last_name,
+            },
+            "forum": {
+                "id":   str(forum.id),
+                "name": forum.name,
+                "slug": forum.slug,
+            },
+        })
+
+    return result  # ✅ Always return the list, even if empty
 
 
 @router.get("/topics/{topic_id}", tags=["Forums"])
@@ -441,6 +494,8 @@ async def get_topic(
     return {
         "id":               str(topic.id),
         "title":            topic.title,
+        "content":          topic.content,
+        "attachment":       topic.attachment,
         "is_pinned":        topic.is_pinned,
         "is_locked":        topic.is_locked,
         "view_count":       topic.view_count,
@@ -458,6 +513,9 @@ async def get_topic(
             "slug": forum.slug,
         },
     }
+
+
+
 
 
 @router.patch("/topics/{topic_id}/pin", tags=["Forums"])
@@ -502,7 +560,9 @@ async def lock_topic(
 @router.patch("/topics/{topic_id}/update", tags=["Forums"])
 async def update_topic(
     topic_id: uuid.UUID,
-    title: str | None = None,
+    title: str = Form(None),
+    content: str = Form(None),
+    files:   list[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -516,6 +576,19 @@ async def update_topic(
         raise HTTPException(status_code=403, detail="Only the topic author or moderators can update the topic.")
     if title is not None:
         topic.title = title
+    if content is not None:
+        topic.content = content
+    if files:
+        attachments = []
+        if topic.attachment:
+            # If there are existing attachments, we need to delete them first
+            for att in topic.attachment:
+                if att:
+                    await delete_file(att)
+        for f in files:
+            file_url = await save_file(file=f, upload_to="topic_attachments")
+            attachments.append(file_url)
+        topic.attachment = attachments if attachments else None
     await topic.save()
     await log_activity(current_user, ActivityActionType.TOPIC_UPDATED, "topic", topic.id)
     return topic
@@ -534,6 +607,10 @@ async def delete_topic(
         raise HTTPException(status_code=404, detail="Topic not found.")
     if topic.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
         raise HTTPException(status_code=403, detail="Only the topic author or moderators can delete the topic.")
+    if topic.attachment:
+        for att in topic.attachment:
+            if att:
+                await delete_file(att)
     await log_activity(current_user, ActivityActionType.TOPIC_DELETED, "topic", topic.id)
     await topic.delete()
     return {"status": "Topic deleted successfully."}
@@ -542,7 +619,9 @@ async def delete_topic(
 @router.post("/forums/{forum_id}/topics", tags=["Forums"], status_code=201)
 async def create_topic(
     forum_id: uuid.UUID,
-    body:     TopicCreate,
+    title: str = Form(...),
+    content: str = Form(None),
+    files:   list[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -554,8 +633,13 @@ async def create_topic(
     if not forum:
         raise HTTPException(status_code=404, detail="Forum not found.")
     await check_forum_access(forum, current_user, need_post=True)
-    topic = await Topic.create(forum=forum, author=current_user, title=body.title)
-    await log_activity(current_user, ActivityActionType.TOPIC_CREATED, "topic", topic.id, body.title)
+    if files:
+        attachments = []
+        for f in files:
+            file_url = await save_file(file=f, upload_to="topic_attachments")
+            attachments.append(file_url)
+    topic = await Topic.create(forum=forum, author=current_user, title=title, content=content, attachment=attachments if attachments else None)
+    await log_activity(current_user, ActivityActionType.TOPIC_CREATED, "topic", topic.id, title)
     return topic
 
 
