@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from tortoise.expressions import F
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uuid
 import os
 import mimetypes
@@ -225,7 +225,7 @@ async def create_folder(
     folder = await DocumentFolder.create(**body.model_dump())
 
     # Seed default R+W permissions for admin and moderator
-    for role in (UserRole.ADMIN, UserRole.MODERATOR):
+    for role in (UserRole.ADMIN):
         await DocumentFolderPermission.get_or_create(
             folder=folder, role=role,
             defaults={"can_read": True, "can_upload": True},
@@ -258,13 +258,33 @@ async def rename_folder(
     return _serialize_folder(folder, can_upload)
 
 
+@router.get("/documents/folders/{folder_id}/permissions", tags=["Documents"])
+async def get_folder_permissions(
+    folder_id:    uuid.UUID,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    """
+    Get the read/upload permissions for all roles on a folder (admin/moderator only).
+    Spec ref: §12.5, §15.2
+    """
+    folder = await DocumentFolder.get_or_none(id=folder_id)
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found.")
+
+    perms = await DocumentFolderPermission.filter(folder=folder).all()
+    return {
+        str(p.role): {"can_read": p.can_read, "can_upload": p.can_upload}
+        for p in perms
+    }
+
+
 @router.patch("/documents/folders/{folder_id}/permissions", tags=["Documents"])
 async def set_folder_permission(
     folder_id:  uuid.UUID,
     role:       UserRole,
     can_read:   bool,
     can_upload: bool,
-    current_user: User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR)),
+    current_user: User = Depends(role_required(UserRole.ADMIN))
 ):
     """
     Set read/upload access for a specific role on a folder (admin only).
@@ -494,3 +514,65 @@ async def delete_document(
 
 
 
+
+
+
+# ─── Pydantic schema ───────────────────────────────────────────────────────────
+
+class BulkFolderPermissionRequest(BaseModel):
+    folder_id: list[uuid.UUID]
+    role:     list[UserRole]
+    can_read: bool
+    can_upload: bool
+
+    @field_validator("folder_id", "role")
+    @classmethod
+    def no_empty(cls, v):
+        if not v:
+            raise ValueError("List cannot be empty.")
+        return v
+
+
+# ─── Endpoint ──────────────────────────────────────────────────────────────────
+
+@router.patch("/folder/permissions/bulk", tags=["Folders"])
+async def set_folder_permissions_bulk(
+    body:         BulkFolderPermissionRequest,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    # 1. Validate all folder IDs exist in ONE query
+    found_folders = await DocumentFolder.filter(id__in=body.folder_id).only("id")
+    found_ids    = {f.id for f in found_folders}
+
+    missing = set(body.folder_id) - found_ids
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Folders not found or inactive: {[str(m) for m in missing]}",
+        )
+
+    # 2. Expand (folder_id x role) combinations
+    records = [
+        DocumentFolderPermission(
+            folder_id = folder_id,
+            role     = role,
+            can_read = body.can_read,
+            can_upload = body.can_upload,
+        )
+        for folder_id in body.folder_id
+        for role in body.role
+    ]
+
+    # 3. Single upsert — one round-trip
+    await DocumentFolderPermission.bulk_create(
+        records,
+        update_fields=["can_read", "can_upload"],
+        on_conflict=["folder_id", "role"],
+    )
+
+    # 4. Return updated rows
+    result = await DocumentFolderPermission.filter(
+        folder_id__in=body.folder_id
+    ).values("id", "folder_id", "role", "can_read", "can_upload")
+
+    return {"updated": len(records), "permissions": result}

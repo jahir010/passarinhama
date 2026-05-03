@@ -12,7 +12,7 @@ from app.config import settings
 # ------------------------------
 ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "pdf", "docx", "txt", "mp4", "mp3", "avi", "mkv", "svg",
                       "ai", "eps"]
-DEFAULT_MAX_FILE_SIZE_MB = 100  # 10 MB
+DEFAULT_MAX_FILE_SIZE_MB = 1024  # 10 MB
 
 
 # ------------------------------

@@ -7,3 +7,5 @@ migrations/
 menv
 __pycache__/
 *.pyc
+media/
+staticfiles/
