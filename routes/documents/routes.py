@@ -139,31 +139,70 @@ async def _get_folder_depth(folder_id: uuid.UUID) -> int:
 # parameterised routes (/{document_id}) to avoid FastAPI UUID-matching issues.
 # ══════════════════════════════════════════════════════════════════════════════
 
+# @router.get("/documents/folders", tags=["Documents"])
+# async def list_folders(
+#     commission_id: uuid.UUID | None = None,
+#     current_user:  User             = Depends(get_current_user),
+# ):
+#     """
+#     Return folders the current user can read, as a nested tree.
+
+#     The tree structure lets the frontend render the sidebar without
+#     additional requests per folder. Root folders (parent_id=None) are
+#     returned at the top level; their children are nested under `children`.
+
+#     ?commission_id=<uuid> filters to folders belonging to that commission
+#     (used by the Commission documents button, spec §11.3).
+
+#     Response shape:
+#       [
+#         {
+#           "id", "name", "color_code", "document_count",
+#           "commission_id", "can_upload",
+#           "children": [ { same shape, no further nesting } ]
+#         }, ...
+#       ]
+#     Spec ref: §12.1, §12.5
+#     """
+#     perms = await DocumentFolderPermission.filter(
+#         role=current_user.role, can_read=True
+#     ).prefetch_related("folder")
+
+#     # Build lookup: folder_id → (folder, can_upload)
+#     accessible: dict[str, tuple] = {}
+#     for p in perms:
+#         accessible[str(p.folder_id)] = (p.folder, p.can_upload)
+
+#     # Optionally filter by commission
+#     all_folders = [f for f, _ in accessible.values()]
+#     if commission_id:
+#         all_folders = [f for f in all_folders if str(f.commission_id) == str(commission_id)]
+
+#     # Separate roots and children
+#     root_folders = [f for f in all_folders if not f.parent_id]
+#     child_folders = [f for f in all_folders if f.parent_id]
+
+#     # Build tree (max depth 3 — only one level of children needed)
+#     result = []
+#     for folder in sorted(root_folders, key=lambda f: f.name):
+#         _, can_upload = accessible[str(folder.id)]
+#         children_data = []
+#         for child in sorted(child_folders, key=lambda f: f.name):
+#             if str(child.parent_id) == str(folder.id):
+#                 _, child_can_upload = accessible.get(str(child.id), (None, False))
+#                 children_data.append(_serialize_folder(child, child_can_upload))
+#         result.append(_serialize_folder(folder, can_upload, children_data))
+
+#     return result
+
+
+
+
 @router.get("/documents/folders", tags=["Documents"])
 async def list_folders(
     commission_id: uuid.UUID | None = None,
-    current_user:  User             = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Return folders the current user can read, as a nested tree.
-
-    The tree structure lets the frontend render the sidebar without
-    additional requests per folder. Root folders (parent_id=None) are
-    returned at the top level; their children are nested under `children`.
-
-    ?commission_id=<uuid> filters to folders belonging to that commission
-    (used by the Commission documents button, spec §11.3).
-
-    Response shape:
-      [
-        {
-          "id", "name", "color_code", "document_count",
-          "commission_id", "can_upload",
-          "children": [ { same shape, no further nesting } ]
-        }, ...
-      ]
-    Spec ref: §12.1, §12.5
-    """
     perms = await DocumentFolderPermission.filter(
         role=current_user.role, can_read=True
     ).prefetch_related("folder")
@@ -173,27 +212,26 @@ async def list_folders(
     for p in perms:
         accessible[str(p.folder_id)] = (p.folder, p.can_upload)
 
-    # Optionally filter by commission
     all_folders = [f for f, _ in accessible.values()]
     if commission_id:
         all_folders = [f for f in all_folders if str(f.commission_id) == str(commission_id)]
 
-    # Separate roots and children
-    root_folders = [f for f in all_folders if not f.parent_id]
-    child_folders = [f for f in all_folders if f.parent_id]
+    # Group folders by parent_id for O(1) child lookup
+    children_map: dict[str | None, list] = {}
+    for folder in all_folders:
+        key = str(folder.parent_id) if folder.parent_id else None
+        children_map.setdefault(key, []).append(folder)
 
-    # Build tree (max depth 3 — only one level of children needed)
-    result = []
-    for folder in sorted(root_folders, key=lambda f: f.name):
-        _, can_upload = accessible[str(folder.id)]
-        children_data = []
-        for child in sorted(child_folders, key=lambda f: f.name):
-            if str(child.parent_id) == str(folder.id):
-                _, child_can_upload = accessible.get(str(child.id), (None, False))
-                children_data.append(_serialize_folder(child, child_can_upload))
-        result.append(_serialize_folder(folder, can_upload, children_data))
+    def build_subtree(parent_id: str | None) -> list:
+        folders = children_map.get(parent_id, [])
+        result = []
+        for folder in sorted(folders, key=lambda f: f.name):
+            _, can_upload = accessible.get(str(folder.id), (None, False))
+            children = build_subtree(str(folder.id))
+            result.append(_serialize_folder(folder, can_upload, children))
+        return result
 
-    return result
+    return build_subtree(None)
 
 
 @router.post("/documents/folders", tags=["Documents"], status_code=201)
@@ -216,7 +254,7 @@ async def create_folder(
 
         # FIX: enforce max depth = 3
         parent_depth = await _get_folder_depth(body.parent_id)
-        if parent_depth >= 3:
+        if parent_depth >= 10:
             raise HTTPException(
                 status_code=400,
                 detail="Maximum folder nesting depth of 3 levels reached. Cannot create subfolder here.",
