@@ -202,6 +202,50 @@ async def _notify_user_payment_validated(user: User):
 
 
 
+async def _notify_new_member(user: User, password: str):
+    try:
+        await send_email(
+            subject="Your Account Has Been Created",
+            to=user.email, html_message=f""" <html><body>Hi {user.first_name}, <br><br>
+
+            Your account has been successfully created by an administrator.
+
+            Below are your account details: <br><br>
+
+            <bold>Email:</bold> {user.email} <br>
+            <bold>Temporary Password:</bold> {password} <br><br>
+
+            You can now log in using the button below:
+
+            <br>
+
+            <div style="text-align:center; margin: 20px 0;">
+            <a href="https://archicopro.netlify.app/login" 
+                style="background-color:#4CAF50; color:white; padding:12px 20px; text-decoration:none; border-radius:5px; display:inline-block;">
+                Login to Your Account
+            </a>
+            </div>
+
+            For security reasons, we strongly recommend that you change your password after your first login.
+
+            If you did not expect this account to be created, please contact our support team immediately.
+
+            <br>
+
+            Best regards,
+            **Admin Team**
+
+            <hr style="margin-top:30px;">
+
+            <p style="font-size:12px; color:gray;">
+            This is an automated message. Please do not reply directly to this email.
+            </p> </body></html>
+            """)
+    except Exception as e:
+        print(f"[notify] Failed to enqueue new member notification task: {e}", flush=True)
+
+
+
 
 def _membership_year(user: User) -> int | None:
     if user.validated_at:
@@ -371,6 +415,7 @@ async def list_users(
 
 @router.post("/users", tags=["Members"], status_code=201)
 async def create_user(
+    background_tasks: BackgroundTasks,
     first_name: str = Form(...),
     last_name:  str = Form(...),
     email:      EmailStr = Form(...),
@@ -416,6 +461,7 @@ async def create_user(
     )
     await log_activity(current_user, ActivityActionType.USER_REGISTERED, "user", user.id,
                        f"New member created: {user.full_name}")
+    background_tasks.add_task(_notify_new_member, user, password)
     return _serialize_user(user)
 
 
