@@ -358,6 +358,8 @@ async def list_users(
         if current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
             raise HTTPException(status_code=403, detail="Not authorised.")
         qs = User.filter(is_deleted=True)
+    elif current_user.role in (UserRole.ADMIN, UserRole.MODERATOR) and status == UserStatus.SUSPENDED:
+        qs = User.filter(is_deleted=True)
     else:
         qs = User.filter(is_deleted=False)
         if current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
