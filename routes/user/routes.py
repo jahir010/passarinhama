@@ -401,7 +401,7 @@ async def list_users(
             "all":       await User.filter(is_deleted=False).count(),
             "active":    await User.filter(is_deleted=False, status=UserStatus.ACTIVE).count(),
             "pending":   await User.filter(is_deleted=False, status=UserStatus.PENDING).count(),
-            "suspended": await User.filter(is_deleted=False, status=UserStatus.SUSPENDED).count(),
+            "suspended": await User.filter(is_deleted=True, status=UserStatus.SUSPENDED).count(),
             "archived":  await User.filter(is_deleted=True).count(),
         }
     else:
