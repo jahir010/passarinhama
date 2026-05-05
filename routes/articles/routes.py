@@ -1,4 +1,6 @@
 
+from typing import List
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, Query, BackgroundTasks
 from tortoise.transactions import in_transaction
 from tortoise.expressions import Q
@@ -394,3 +396,22 @@ async def list_article_categories(current_user: User = Depends(get_current_user)
 @router.post("/article-categories", tags=["Articles"], status_code=201)
 async def create_article_category(name: str, color_code: str = "#FFD600", current_user: User = Depends(role_required(UserRole.ADMIN))):
     return await ArticleCategory.create(name=name, color_code=color_code)
+
+
+
+
+
+
+@router.post("/file-upload", tags=["Articles"])
+async def upload_file(file: UploadFile = File(...),
+                      current_user: User = Depends(get_current_user)):
+    url = await save_file(file, upload_to="article_files")
+    return {"url": url}
+
+
+@router.delete("/file-delete", tags=["Articles"])
+async def delete_file_endpoint(file_url: List[str] = Form(...),
+                             current_user: User = Depends(get_current_user)):
+    for url in file_url:
+        await delete_file(url)
+    return {"deleted": file_url}
