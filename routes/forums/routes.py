@@ -559,12 +559,50 @@ async def lock_topic(
     return {"id": str(topic.id), "is_locked": topic.is_locked}
 
 
+# @router.patch("/topics/{topic_id}/update", tags=["Forums"])
+# async def update_topic(
+#     topic_id: uuid.UUID,
+#     title: str = Form(None),
+#     content: str = Form(None),
+#     files:   Optional[list[UploadFile]] = File(None),
+#     current_user: User = Depends(get_current_user),
+# ):
+#     """
+#     Update a topic's title (author only).
+#     Spec ref: §7.2
+#     """
+#     topic = await Topic.get_or_none(id=topic_id)
+#     if not topic:
+#         raise HTTPException(status_code=404, detail="Topic not found.")
+#     if topic.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
+#         raise HTTPException(status_code=403, detail="Only the topic author or moderators can update the topic.")
+#     if title is not None:
+#         topic.title = title
+#     if content is not None:
+#         topic.content = content
+#     if files:
+#         attachments = []
+#         if topic.attachment:
+#             # If there are existing attachments, we need to delete them first
+#             for att in topic.attachment:
+#                 if att:
+#                     await delete_file(att)
+#         for f in files:
+#             file_url = await save_file(file=f, upload_to="topic_attachments")
+#             attachments.append(file_url)
+#         topic.attachment = attachments if attachments else None
+#     await topic.save()
+#     await log_activity(current_user, ActivityActionType.TOPIC_UPDATED, "topic", topic.id)
+#     return topic
+
+
+
 @router.patch("/topics/{topic_id}/update", tags=["Forums"])
 async def update_topic(
     topic_id: uuid.UUID,
     title: str = Form(None),
     content: str = Form(None),
-    files:   Optional[list[UploadFile]] = File(None),
+    files: Optional[list[UploadFile]] = File(default=None),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -580,20 +618,26 @@ async def update_topic(
         topic.title = title
     if content is not None:
         topic.content = content
-    if files:
+
+    # Filter out any non-UploadFile entries (e.g. empty string placeholders)
+    valid_files = [f for f in (files or []) if isinstance(f, UploadFile)]
+
+    if valid_files:
         attachments = []
         if topic.attachment:
-            # If there are existing attachments, we need to delete them first
             for att in topic.attachment:
                 if att:
                     await delete_file(att)
-        for f in files:
+        for f in valid_files:
             file_url = await save_file(file=f, upload_to="topic_attachments")
             attachments.append(file_url)
         topic.attachment = attachments if attachments else None
+
     await topic.save()
     await log_activity(current_user, ActivityActionType.TOPIC_UPDATED, "topic", topic.id)
     return topic
+
+
 
 @router.delete("/topics/{topic_id}/delete", tags=["Forums"], status_code=204)
 async def delete_topic(
