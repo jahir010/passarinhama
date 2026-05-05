@@ -377,13 +377,15 @@ async def publish_article(
 @router.delete("/articles/{article_id}", status_code=204, tags=["Articles"])
 async def delete_article(article_id: uuid.UUID, current_user: User = Depends(role_required(UserRole.ADMIN))):
     article = await Article.get_or_none(id=article_id)
-    if article and article.structured_fields["file_urls"]:
-        for url in article.structured_fields["file_urls"]:
+    if article and article.structured_fields.get("file_urls", []):
+        for url in article.structured_fields.get("file_urls", []):
             print(f"Deleting file from article deletion: {url}", flush=True)
             await delete_file(url)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found.")
     await article.delete()
+
+    return "delete success"
  
  
 # ── Article Categories ────────────────────
