@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, BackgroundTasks
 from tortoise.transactions import in_transaction
 from tortoise.expressions import Q, F
@@ -562,7 +564,7 @@ async def update_topic(
     topic_id: uuid.UUID,
     title: str = Form(None),
     content: str = Form(None),
-    files:   list[UploadFile] = File(None),
+    files:   Optional[list[UploadFile]] = File(None),
     current_user: User = Depends(get_current_user),
 ):
     """
