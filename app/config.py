@@ -71,3 +71,6 @@ async def close_db():
     if not getattr(Tortoise, "_inited", False):
         return
     await Tortoise.close_connections()
+
+
+
