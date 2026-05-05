@@ -603,35 +603,48 @@ async def update_topic(
     title: str = Form(None),
     content: str = Form(None),
     files: Optional[list[UploadFile]] = File(default=None),
+    delete_files: Optional[list[str]] = Form(default=None),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Update a topic's title (author only).
+    Update a topic's title, content, or attachments (author/moderator/admin only).
     Spec ref: §7.2
     """
     topic = await Topic.get_or_none(id=topic_id)
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found.")
+
     if topic.author_id != current_user.id and current_user.role not in (UserRole.ADMIN, UserRole.MODERATOR):
         raise HTTPException(status_code=403, detail="Only the topic author or moderators can update the topic.")
+
     if title is not None:
         topic.title = title
+
     if content is not None:
         topic.content = content
 
-    # Filter out any non-UploadFile entries (e.g. empty string placeholders)
-    valid_files = [f for f in (files or []) if isinstance(f, UploadFile)]
 
-    if valid_files:
-        attachments = []
-        if topic.attachment:
-            for att in topic.attachment:
-                if att:
-                    await delete_file(att)
-        for f in valid_files:
+    print(f"Files to update: {files}")
+
+    # Work on a mutable copy of existing attachments
+    attachments: list[str] = list(topic.attachment or [])
+
+    # Delete specified attachments
+    if delete_files:
+        for url in delete_files:
+            if url in attachments:
+                attachments.remove(url)
+                await delete_file(url)  # only delete if it actually belonged to this topic
+
+    
+    # Append new uploaded files to existing attachments
+    if files:
+        for f in files:
             file_url = await save_file(file=f, upload_to="topic_attachments")
             attachments.append(file_url)
-        topic.attachment = attachments if attachments else None
+
+    # Persist the final attachment list
+    topic.attachment = attachments if attachments else None
 
     await topic.save()
     await log_activity(current_user, ActivityActionType.TOPIC_UPDATED, "topic", topic.id)
