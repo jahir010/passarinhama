@@ -618,7 +618,14 @@ async def get_user(
 @router.patch("/users/{user_id}", tags=["Members"])
 async def update_user(
     user_id: uuid.UUID,
-    body: UserAdminUpdate,
+    first_name: str = Form(None),
+    last_name:  str = Form(None),
+    phone:      str | None = Form(None),
+    mobile:     str | None = Form(None),
+    address:    str | None = Form(None),
+    city:      str | None = Form(None),
+    department: str | None = Form(None),
+    society:    str | None = Form(None),
     current_user: User = Depends(role_required(UserRole.ADMIN)),
 ):
     """Update any member's details (admin only)."""
@@ -626,8 +633,23 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="Member not found.")
 
-    for field, value in body.model_dump(exclude_none=True).items():
-        setattr(user, field, value)
+    if first_name is not None:
+        user.first_name = first_name
+    if last_name is not None:
+        user.last_name = last_name
+    if phone is not None:
+        user.phone = phone
+    if mobile is not None:
+        user.mobile = mobile
+    if address is not None:
+        user.street_address = address
+    if city is not None:
+        user.city = city
+    if department is not None:
+        user.company_role = department
+    if society is not None:
+        user.company_name = society
+
     await user.save()
     await user.fetch_related("membership_category")
     return _serialize_profile(user)
