@@ -248,10 +248,7 @@ async def get_folder_permissions(
         raise HTTPException(status_code=404, detail="Folder not found.")
 
     perms = await DocumentFolderPermission.filter(folder=folder).all()
-    return {
-        str(p.role): {"can_read": p.can_read, "can_upload": p.can_upload}
-        for p in perms
-    }
+    return perms
 
 
 @router.patch("/documents/folders/{folder_id}/permissions", tags=["Documents"])
