@@ -25,7 +25,8 @@ class EventCreate(BaseModel):
     title:         str
     event_type:    EventType       = EventType.GENERAL
     event_date:    str                                  # "YYYY-MM-DD"
-    event_time:    str | None      = None               # "HH:MM"
+    event_time:    str     = None               # "HH:MM"
+    end_date:      str | None      = None               # "YYYY-MM-DD"
     location:      str | None      = None
     description:   str | None      = None
     max_attendees: int | None      = None
@@ -40,6 +41,17 @@ class EventCreate(BaseModel):
             return date.fromisoformat(v)
         except ValueError:
             raise ValueError("event_date must be in YYYY-MM-DD format.")
+    
+    @field_validator("end_date")
+    @classmethod
+    def parse_end_date(cls, v: str | None) -> date | None:
+        if v is None:
+            return None
+        try:
+            return date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format.")
+
 
     @field_validator("event_time")
     @classmethod
@@ -57,6 +69,7 @@ class EventUpdate(BaseModel):
     title:         str | None      = None
     event_type:    EventType | None = None
     event_date:    str | None      = None
+    end_date:      str | None      = None
     event_time:    str | None      = None
     location:      str | None      = None
     description:   str | None      = None
@@ -72,6 +85,17 @@ class EventUpdate(BaseModel):
             return date.fromisoformat(v)
         except ValueError:
             raise ValueError("event_date must be in YYYY-MM-DD format.")
+    
+    @field_validator("end_date")
+    @classmethod
+    def parse_end_date(cls, v: str | None) -> date | None:
+        if v is None:
+            return None
+        try:
+            return date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format.")
+
 
     @field_validator("event_time")
     @classmethod
@@ -209,6 +233,7 @@ async def _serialize_event(event: Event, current_user: User | None = None) -> di
         "title":          event.title,
         "event_type":     event.event_type,
         "event_date":     event.event_date.isoformat(),
+        "end_date":       event.end_date.isoformat() if event.end_date else None,
         # day/month split — needed by dashboard widget (§5.3)
         "day":            event.event_date.day,
         "month":          event.event_date.strftime("%b"),   # "May", "Jun" …

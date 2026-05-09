@@ -188,6 +188,7 @@ async def _serialize_training(training: Training, current_user: User | None = No
         "description":    training.description,
         "format":         training.format,
         "training_date":  training.training_date.isoformat() if training.training_date else None,
+        "end_date":       training.end_date.isoformat() if training.end_date else None,
         "duration_hours": training.duration_hours,
         "max_attendees":  training.max_attendees,
         "attendee_count": attendee_count,
@@ -314,6 +315,7 @@ async def create_training(
     description:      Optional[str]     = Form(None),
     format:           TrainingFormat    = Form(TrainingFormat.ONLINE),
     training_date:    Optional[str]     = Form(None),   # "YYYY-MM-DD"
+    end_date:         Optional[str]     = Form(None),   # "YYYY-MM-DD"
     duration_hours:   Optional[int]     = Form(None),
     max_attendees:    Optional[int]     = Form(None),
     attachments:      List[UploadFile]  = File(default=[]),
@@ -330,11 +332,18 @@ async def create_training(
     """
     # Coerce and validate date
     parsed_date: Optional[date] = None
+    parsed_end_date: Optional[date] = None
     if training_date:
         try:
             parsed_date = date.fromisoformat(training_date)
         except ValueError:
             raise HTTPException(status_code=422, detail="training_date must be YYYY-MM-DD format.")
+
+    if end_date:
+        try:
+            parsed_end_date = date.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="end_date must be YYYY-MM-DD format.")
 
     # Upload attachments
     attachment_urls: List[str] = []
@@ -348,6 +357,7 @@ async def create_training(
         description=description,
         format=format,
         training_date=parsed_date,
+        end_date=parsed_end_date,
         duration_hours=duration_hours,
         max_attendees=max_attendees,
         attachments=attachment_urls if attachment_urls else None,
@@ -379,6 +389,7 @@ async def update_training(
     description:           Optional[str]        = Form(None),
     format:                Optional[TrainingFormat] = Form(None),
     training_date:         Optional[str]        = Form(None),   # "YYYY-MM-DD"
+    end_date:              Optional[str]        = Form(None),   # "YYYY-MM-DD"
     duration_hours:        Optional[int]        = Form(None),
     max_attendees:         Optional[int]        = Form(None),
     status:                Optional[TrainingStatus] = Form(None),
@@ -411,6 +422,11 @@ async def update_training(
             training.training_date = date.fromisoformat(training_date)
         except ValueError:
             raise HTTPException(status_code=422, detail="training_date must be YYYY-MM-DD format.")
+    if end_date is not None:
+        try:
+            training.end_date = date.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="end_date must be YYYY-MM-DD format.")
     if duration_hours is not None:
         training.duration_hours = duration_hours
     if max_attendees is not None:

@@ -24,6 +24,7 @@ class Event(models.Model):
     title         = fields.CharField(max_length=300)
     event_type    = fields.CharEnumField(EventType, default=EventType.GENERAL)
     event_date    = fields.DateField()
+    end_date      = fields.DateField(null=True)
     event_time    = fields.TimeField(null=True)
     location      = fields.CharField(max_length=300, null=True)
     description   = fields.TextField(null=True)

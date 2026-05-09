@@ -36,6 +36,7 @@ class Training(models.Model):
     description     = fields.TextField(null=True)
     format          = fields.CharEnumField(TrainingFormat, default=TrainingFormat.ONLINE)
     training_date   = fields.DateField(null=True)
+    end_date        = fields.DateField(null=True)
     duration_hours  = fields.IntField(null=True)
     max_attendees   = fields.IntField(null=True)
     attachments     = fields.JSONField(null=True)  # List of file URLs or metadata
