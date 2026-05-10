@@ -2,6 +2,9 @@ from typing import List, Optional
 from uuid import UUID
 import uuid
 from datetime import datetime, timezone as UTC, timedelta
+import csv
+from io import StringIO
+from fastapi.responses import StreamingResponse
 
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, File, Form
@@ -761,6 +764,50 @@ async def restore_user(
 # Routes — Dashboard stats helpers  (§5)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/users/export/to_csv", tags=["Dashboard"])
+async def export_csv(current_user: User = Depends(role_required(UserRole.ADMIN))):
+    # Correct filter syntax
+    users = await User.filter(status__in=[UserStatus.PENDING, UserStatus.ACTIVE])
+    
+    # Define all CSV columns
+    fieldnames = [
+        'id', 'email', 'first_name', 'last_name', 
+        'phone', 'mobile', 'address', 'city', 
+        'society', 'department', 'role', 'status',
+        'member_since', 'last_login_at', 'created_at'
+    ]
+    
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
+    # Write each user's data
+    for user in users:
+        writer.writerow({
+            'id': str(user.id),
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone,
+            'mobile': user.mobile,
+            'address': user.street_address,
+            'city': user.city,
+            'society': user.company_name,
+            'department': user.company_role,
+            'role': user.role.value if hasattr(user.role, 'value') else user.role,
+            'status': user.status.value if hasattr(user.status, 'value') else user.status,
+            'member_since': user.member_since.isoformat() if user.member_since else '',
+            'last_login_at': user.last_login_at.isoformat() if user.last_login_at else '',
+            'created_at': user.created_at.isoformat() if user.created_at else ''
+        })
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=users_export.csv"}
+    )
+
 @router.get("/users/stats/roles", tags=["Dashboard"])
 async def role_distribution(current_user: User = Depends(role_required(UserRole.ADMIN))):
     """
@@ -784,6 +831,11 @@ async def online_count(current_user: User = Depends(get_current_user)):
     threshold = datetime.now(UTC.utc) - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
     count = await User.filter(is_deleted=False, last_seen_at__gte=threshold).count()
     return {"online": count}
+
+
+
+
+
 
 
 
