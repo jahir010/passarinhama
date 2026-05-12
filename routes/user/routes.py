@@ -536,7 +536,6 @@ async def update_me(
             avatar_url = await update_file(avatar, current_user.avatar_url, upload_to="avatars")
             current_user.avatar_url = avatar_url
         except Exception as e:
-            print(f"Failed to upload photo for user {current_user.id}: {e}")
             raise HTTPException(status_code=500, detail="Failed to upload photo.")
     if first_name is not None:
         current_user.first_name = first_name
@@ -629,6 +628,10 @@ async def update_user(
     city:      str | None = Form(None),
     department: str | None = Form(None),
     society:    str | None = Form(None),
+    avatar:     UploadFile | None = File(None),
+    role:      UserRole = Form(UserRole.AUDITEUR),
+    status:    UserStatus = Form(UserStatus.PENDING),
+    payment_validated: bool = Form(False),
     current_user: User = Depends(role_required(UserRole.ADMIN)),
 ):
     """Update any member's details (admin only)."""
@@ -652,6 +655,19 @@ async def update_user(
         user.company_role = department
     if society is not None:
         user.company_name = society
+    if avatar and avatar.filename:
+        try:
+            avatar_url = await update_file(avatar, current_user.avatar_url, upload_to="avatars")
+            user.avatar_url = avatar_url
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to upload photo.")
+    if role is not None:
+        user.role = role
+    if status is not None:
+        user.status = status
+    if payment_validated is not None:
+        user.is_payment_validated = payment_validated
+
 
     await user.save()
     await user.fetch_related("membership_category")
