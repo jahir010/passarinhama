@@ -692,8 +692,8 @@ async def create_topic(
     if not forum:
         raise HTTPException(status_code=404, detail="Forum not found.")
     await check_forum_access(forum, current_user, need_post=True)
+    attachments = []
     if files:
-        attachments = []
         for f in files:
             file_url = await save_file(file=f, upload_to="topic_attachments")
             attachments.append(file_url)
