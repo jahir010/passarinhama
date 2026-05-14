@@ -366,7 +366,7 @@ async def get_event(
 async def create_event(
     body:             EventCreate,
     background_tasks: BackgroundTasks,
-    current_user:     User = Depends(role_required(UserRole.ADMIN)),
+    current_user:     User = Depends(role_required(UserRole.ADMIN, UserRole.MODERATOR)),
 ):
     """
     Create a new event (admin only).

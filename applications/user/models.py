@@ -16,8 +16,13 @@ class UserRole(str, Enum):
     MODERATOR               = "moderator"
     MEMBRE                  = "membre"
     AUDITEUR                = "auditeur"
-    PARTENAIRES_TECHNICOPRO = "partenaires_technicopro"
-    COMITE_COPROPRIETAIRE   = "comite_coproprietaire"
+    MEMBRE_ARCHITECTES      = "membre_architectes"
+    MEMBRES_TECHNICOPRO     = "membres_technicopro"
+    MEMBRE_COMITE           = "membre_comite"
+    MEMBRE_DHONNEUR         = "membre_dhonneur"
+    VISITEUR                = "visiteur"
+    PARTENAIRE              = "partenaire"
+
 
 
 class UserStatus(str, Enum):

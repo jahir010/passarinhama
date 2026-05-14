@@ -9,7 +9,7 @@ from app.token import get_current_user
 from app.utils.helper_functions import log_activity
 from app.utils.file_manager import save_file, delete_file, update_file
 
-from applications.trainings.models import Training, TrainingFormat, TrainingStatus, TrainingRegistration
+from applications.trainings.models import Training, TrainingFormat, TrainingStatus, TrainingRegistration, TrainingRolePermission
 from applications.user.models import User, UserRole, ActivityActionType, UserStatus
 from applications.notifications.notifications import NotificationLog, NotificationType, NotificationPreference
 from app.utils.send_email import send_bulk_email, send_email
@@ -363,6 +363,8 @@ async def create_training(
         attachments=attachment_urls if attachment_urls else None,
         created_by=current_user,
     )
+
+    perm = await TrainingRolePermission.create(training=training, role=UserRole.ADMIN, can_read=True, can_write=True)
     await log_activity(
         current_user, ActivityActionType.TRAINING_CREATED, "training", training.id, title
     )
@@ -587,3 +589,80 @@ async def list_training_registrations(
             for r in regs
         ],
     }
+
+
+
+# ─── Pydantic schema ───────────────────────────────────────────────────────────
+
+class BulkTrainingPermissionRequest(BaseModel):
+    training_id: list[uuid.UUID]
+    role:     list[UserRole]
+    can_read: bool
+    can_write: bool
+
+    @field_validator("training_id", "role")
+    @classmethod
+    def no_empty(cls, v):
+        if not v:
+            raise ValueError("List cannot be empty.")
+        return v
+
+
+
+@router.patch("/training/permissions/bulk", tags=["Training"])
+async def set_forum_permissions_bulk(
+    body:         BulkTrainingPermissionRequest,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    # 1. Validate all forum IDs exist in ONE query
+    found_trainings = await Training.filter(id__in=body.training_id).only("id")
+    found_ids    = {f.id for f in found_trainings}
+
+    missing = set(body.training_id) - found_ids
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Forums not found or inactive: {[str(m) for m in missing]}",
+        )
+
+    # 2. Expand (forum_id x role) combinations
+    records = [
+        TrainingRolePermission(
+            training_id = training_id,
+            role     = role,
+            can_read = body.can_read,
+            can_write = body.can_write,
+        )
+        for training_id in body.training_id
+        for role in body.role
+    ]
+
+    # 3. Single upsert — one round-trip
+    await TrainingRolePermission.bulk_create(
+        records,
+        update_fields=["can_read", "can_write"],
+        on_conflict=["training_id", "role"],
+    )
+
+    # 4. Return updated rows
+    result = await TrainingRolePermission.filter(
+        training_id__in=body.training_id
+    ).values("id", "training_id", "role", "can_read", "can_write")
+
+    return {"updated": len(records), "permissions": result}
+
+
+@router.get("/forums/{training_id}/permissions", tags=["Training"])
+async def get_forum_permissions(
+    training_id: uuid.UUID,
+    current_user: User = Depends(role_required(UserRole.ADMIN)),
+):
+    """
+    Get the read/post permissions for all roles on a forum (admin only).
+    Spec ref: §15.5
+    """
+    training = await Training.get_or_none(id=training_id)
+    if not training:
+        raise HTTPException(status_code=404, detail="Forum not found.")
+    perms = await TrainingRolePermission.filter(training=training).all()
+    return perms

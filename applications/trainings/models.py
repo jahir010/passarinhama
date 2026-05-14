@@ -51,6 +51,22 @@ class Training(models.Model):
  
     def __str__(self) -> str:
         return self.title
+    
+
+# ─────────────────────────────────────────
+# 16. TrainingRole Permission
+# ─────────────────────────────────────────
+
+class TrainingRolePermission(models.Model):
+    id       = fields.UUIDField(pk=True, default=uuid.uuid4)
+    training    = fields.ForeignKeyField("models.Training", related_name="role_permissions", on_delete=fields.CASCADE)
+    role     = fields.CharEnumField(UserRole)
+    can_read = fields.BooleanField(default=False)
+    can_write = fields.BooleanField(default=False)
+ 
+    class Meta:
+        table           = "training_role_permissions"
+        unique_together = [("training", "role")]
  
  
 # ─────────────────────────────────────────
