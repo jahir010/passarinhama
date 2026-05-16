@@ -23,6 +23,16 @@ class UserRole(str, Enum):
     VISITEUR                = "visiteur"
     PARTENAIRE              = "partenaire"
 
+class FEATURES(str, Enum):
+    USER                   = "user"
+    FORUM                  = "forum"
+    ARTICLE                = "article"
+    TRAINING               = "training"
+    EVENT                  = "event"
+    DOCUMENT               = "document"
+    
+
+
 
 
 class UserStatus(str, Enum):
